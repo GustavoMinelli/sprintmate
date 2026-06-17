@@ -1,0 +1,15 @@
+# Binaries
+/sprintmate
+/sprintmate.exe
+/dist/
+
+# Test / coverage output
+*.out
+coverage.txt
+
+# Generated issue context (written into target project dirs, but ignore here too)
+.issue-context.md
+
+# OS noise
+.DS_Store
+Thumbs.db

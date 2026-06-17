@@ -1,0 +1,59 @@
+# SprintMate configuration example.
+# Copy to your user config dir (run `sprintmate config` to generate it via the
+# TUI wizard instead of editing by hand):
+#   Linux:   ~/.config/sprintmate/config.yaml
+#   macOS:   ~/Library/Application Support/sprintmate/config.yaml
+#   Windows: %AppData%\sprintmate\config.yaml
+
+jira:
+  host: https://empresa.atlassian.net
+  email: voce@empresa.com
+  token: xxxxx                 # or set the SPRINTMATE_JIRA_TOKEN env var
+
+  # --- configurable issue source (board / columns / sprint) ---
+  board: "Sprint Board"        # board name or id; leave empty to use raw `jql`
+  sprint: active               # active | future | all | <sprintId>
+  columns: ["To Do", "In Progress"]   # board columns to pull; empty = all columns
+  assignee: currentUser        # currentUser | <accountId> | all
+
+  # --- advanced: full override (ignores board/columns/sprint above) ---
+  jql: ""                      # e.g. "assignee = currentUser() AND status != Done ORDER BY priority DESC"
+
+  # optional custom field overrides; auto-discovered when omitted
+  fields: {}
+  #  sprint: customfield_10020
+  #  story_points: customfield_10016
+
+agent:
+  default: claude
+
+agents:                        # each agent's command is configurable
+  claude:
+    command: claude
+    args: ["{context_file}"]   # placeholders: {context_file} {key} {branch} {dir}
+  codex:
+    command: codex
+    args: []
+
+launch:
+  strategy: auto               # auto | tmux | window | inplace
+  # tmux/window open the agent in its own pane/window and keep the dashboard
+  # open so you can launch more issues; inplace replaces this terminal.
+
+git:
+  create_branch: true
+  branch_pattern: "{key}-{slug}"   # e.g. demo-123-corrigir-login-social
+
+keys:                          # configurable keybindings
+  up: ["up", "k"]
+  down: ["down", "j"]
+  launch: ["enter"]
+  switch_agent: ["tab"]
+  refresh: ["r"]
+  open_browser: ["o"]
+  search: ["/"]
+  settings: ["s"]
+  quit: ["q", "ctrl+c"]
+
+# pasta de trabalho: onde os agentes são abertos (toda demanda roda aqui)
+workdir: ~/Documents/projetos

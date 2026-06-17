@@ -1,0 +1,55 @@
+version: 2
+
+project_name: sprintmate
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: sprintmate
+    main: ./cmd/sprintmate
+    binary: sprintmate
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+
+# Publishes a formula to github.com/GustavoMinelli/homebrew-tap on release.
+brews:
+  - name: sprintmate
+    repository:
+      owner: GustavoMinelli
+      name: homebrew-tap
+    homepage: "https://github.com/GustavoMinelli/sprintmate"
+    description: "Connect Jira to your AI coding agents from the terminal"
+    license: MIT
+    commit_author:
+      name: goreleaser
+      email: noreply@github.com
+    test: |
+      system "#{bin}/sprintmate", "--version"

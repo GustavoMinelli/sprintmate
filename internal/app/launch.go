@@ -1,0 +1,96 @@
+// Package app holds the launch orchestration that ties the pieces together:
+// resolve the project directory, create/reuse the git branch, build the issue
+// context file, and launch the chosen agent via the terminal package.
+//
+// It deliberately does not depend on the TUI: the TUI selects an issue+agent
+// and exits, then the entrypoint calls PrepareAndLaunch.
+package app
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
+	"github.com/GustavoMinelli/sprintmate/internal/agents"
+	"github.com/GustavoMinelli/sprintmate/internal/config"
+	issuecontext "github.com/GustavoMinelli/sprintmate/internal/context"
+	"github.com/GustavoMinelli/sprintmate/internal/git"
+	"github.com/GustavoMinelli/sprintmate/internal/jira"
+	"github.com/GustavoMinelli/sprintmate/internal/terminal"
+)
+
+// Plan is the resolved set of actions for launching an issue, computed before
+// any side effects so it can be previewed.
+type Plan struct {
+	Issue     jira.Issue
+	AgentName string
+	Dir       string
+	Branch    string
+}
+
+// BuildPlan resolves the working directory and branch name for an issue without
+// performing any side effects.
+func BuildPlan(cfg *config.Config, issue jira.Issue, agentName string) (Plan, error) {
+	dir, ok := cfg.WorkdirPath()
+	if !ok {
+		return Plan{}, fmt.Errorf("nenhuma pasta de trabalho configurada (defina em configurações)")
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return Plan{}, fmt.Errorf("a pasta de trabalho %q não existe", dir)
+	}
+	branch := git.BranchName(cfg.Git.BranchPattern, issue.Key, issue.Title)
+	return Plan{Issue: issue, AgentName: agentName, Dir: dir, Branch: branch}, nil
+}
+
+// PrepareAndLaunch executes the plan: branch, context, agent launch.
+func PrepareAndLaunch(ctx context.Context, cfg *config.Config, plan Plan) error {
+	agent, ok := agents.Get(plan.AgentName)
+	if !ok {
+		return fmt.Errorf("unknown agent %q", plan.AgentName)
+	}
+	if !agent.IsInstalled() {
+		return fmt.Errorf("agent %q is not installed (command not found on PATH)", plan.AgentName)
+	}
+
+	// Bound the preparation steps (git, network, file write) so a hung git
+	// prompt or slow API can't block forever. The interactive agent launch
+	// itself runs without a deadline.
+	prepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Git branch (best-effort: only when enabled and inside a repo). Only
+	// expose {branch} to the agent when a branch was actually created/reused.
+	branchForAgent := ""
+	if cfg.Git.CreateBranch && git.Available() && git.IsRepo(prepCtx, plan.Dir) {
+		if _, err := git.CreateOrReuseBranch(prepCtx, plan.Dir, plan.Branch); err != nil {
+			return fmt.Errorf("preparing branch: %w", err)
+		}
+		branchForAgent = plan.Branch
+	}
+
+	// Best-effort: refresh the genuinely most-recent comments for the context.
+	if cfg.Jira.Host != "" && plan.Issue.Key != "" {
+		client := jira.New(cfg.Jira.Host, cfg.Jira.Email, cfg.Jira.Token)
+		if cs, err := client.RecentComments(prepCtx, plan.Issue.Key, 5); err == nil && len(cs) > 0 {
+			plan.Issue.Comments = cs
+		}
+	}
+
+	// Issue context file.
+	ctxPath, err := issuecontext.NewBuilder().Build(prepCtx, plan.Issue, plan.Dir)
+	if err != nil {
+		return err
+	}
+
+	// Agent command spec.
+	ac := cfg.Agents[plan.AgentName]
+	spec := agent.Spec(agents.Params{
+		Issue:       plan.Issue,
+		ContextPath: ctxPath,
+		Branch:      branchForAgent,
+		Dir:         plan.Dir,
+	}, agents.Config{Command: ac.Command, Args: ac.Args})
+
+	return terminal.Launch(spec, cfg.Launch.Strategy)
+}
