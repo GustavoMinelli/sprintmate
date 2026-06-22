@@ -90,7 +90,7 @@ func (c *Client) resolveSprint(ctx context.Context, boardID int, spec string) (i
 		return 0, "", false, nil
 	case isDigits(spec):
 		var n int
-		fmt.Sscan(spec, &n)
+		_, _ = fmt.Sscan(spec, &n) // spec is all digits, so this can't fail
 		return n, fmt.Sprintf("Sprint %d", n), true, nil
 	default: // active | future
 		sprints, e := c.ListSprints(ctx, boardID, strings.ToLower(spec))
@@ -342,7 +342,7 @@ func (c *Client) RecentComments(ctx context.Context, key string, max int) ([]Com
 			Body json.RawMessage `json:"body"`
 		} `json:"comments"`
 	}
-	if err := c.do(ctx, http.MethodGet, "/rest/api/3/issue/"+key+"/comment", q, nil, &wrap); err != nil {
+	if err := c.do(ctx, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(key)+"/comment", q, nil, &wrap); err != nil {
 		return nil, err
 	}
 	out := make([]Comment, 0, len(wrap.Comments))

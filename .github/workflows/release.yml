@@ -19,7 +19,9 @@ jobs:
           go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          # Pin the goreleaser line so release artifacts and the Homebrew
+          # formula are reproducible instead of tracking "latest".
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

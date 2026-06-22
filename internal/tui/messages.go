@@ -10,7 +10,6 @@ import (
 type errMsg struct{ err error }
 
 type connTestedMsg struct {
-	me  jira.Myself
 	err error
 }
 
@@ -43,10 +42,16 @@ type launchMsg struct {
 // launchedMsg reports the outcome of a windowed/tmux launch that ran in the
 // background while the dashboard stayed open, so the user can launch another.
 type launchedMsg struct {
-	key   string
-	agent string
-	err   error
+	key      string
+	agent    string
+	strategy string // the concrete strategy used (tmux/window), for the message
+	err      error
 }
+
+// updateAvailableMsg is delivered when a newer release exists on GitHub. The
+// check runs in the background on dashboard start; failures and "already current"
+// are swallowed (the command returns nil), so a network problem never surfaces.
+type updateAvailableMsg struct{ latest string }
 
 // openSettingsMsg switches the root from the dashboard to the wizard.
 type openSettingsMsg struct{}

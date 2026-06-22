@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/GustavoMinelli/sprintmate/internal/agents"
 )
 
 // EnvToken is the environment variable that overrides jira.token when set.
@@ -42,6 +44,13 @@ func (c *Config) SetToken(token string) {
 
 // TokenFromEnv reports whether the active token came from the environment.
 func (c *Config) TokenFromEnv() bool { return c.tokenFromEnv }
+
+// AgentConfig converts the per-agent override for name into the launch config
+// the agents package expects, keeping the field mapping in one place.
+func (c *Config) AgentConfig(name string) agents.Config {
+	a := c.Agents[name]
+	return agents.Config{Command: a.Command, Args: a.Args}
+}
 
 // Jira holds the connection and the configurable issue source (board, columns,
 // sprint). When JQL is set it overrides board/columns/sprint entirely.

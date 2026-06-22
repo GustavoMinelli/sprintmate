@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
@@ -15,6 +17,7 @@ import (
 	"github.com/GustavoMinelli/sprintmate/internal/config"
 	"github.com/GustavoMinelli/sprintmate/internal/jira"
 	"github.com/GustavoMinelli/sprintmate/internal/terminal"
+	"github.com/GustavoMinelli/sprintmate/internal/update"
 )
 
 // issueItem adapts a jira.Issue to the list.DefaultItem interface.
@@ -48,20 +51,22 @@ type dashboard struct {
 	keys     keymap
 	agentSet []string
 	agentIdx int
-	mascot   mascot // animation frame is supplied by the root model
 
 	sprintLabel string
 	boardName   string
 	loading     bool
-	launching   bool   // a windowed/tmux launch is in flight
+	launching   bool // a windowed/tmux launch is in flight
 	err         string
 	notice      string // transient error (e.g. failed to open browser)
 	status      string // transient positive message (e.g. agent launched)
 
+	version string // the running build, compared against the latest release
+	latest  string // newer release found on GitHub, "" when up to date/unknown
+
 	width, height int
 }
 
-func newDashboard(cfg *config.Config) dashboard {
+func newDashboard(cfg *config.Config, version string) dashboard {
 	l := list.New(nil, newIssueDelegate(), 0, 0)
 	l.SetShowTitle(false) // we render our own header
 	l.DisableQuitKeybindings()
@@ -82,7 +87,7 @@ func newDashboard(cfg *config.Config) dashboard {
 	}
 
 	names := agents.Names()
-	idx := indexOf(names, cfg.Agent.Default)
+	idx := slices.Index(names, cfg.Agent.Default)
 	if idx < 0 {
 		idx = 0
 	}
@@ -96,10 +101,13 @@ func newDashboard(cfg *config.Config) dashboard {
 		agentSet: names,
 		agentIdx: idx,
 		loading:  true,
+		version:  version,
 	}
 }
 
-func (d dashboard) Init() tea.Cmd { return d.loadIssues() }
+func (d dashboard) Init() tea.Cmd {
+	return tea.Batch(d.loadIssues(), d.checkUpdate())
+}
 
 func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -111,6 +119,10 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 
 	case errMsg:
 		d.notice = msg.err.Error()
+		return d, nil
+
+	case updateAvailableMsg:
+		d.latest = msg.latest
 		return d, nil
 
 	case issuesLoadedMsg:
@@ -136,7 +148,11 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 			return d, nil
 		}
 		d.notice = ""
-		d.status = fmt.Sprintf("✓ %s lançado em nova janela — escolha outra demanda ou q para sair", msg.key)
+		where := "em nova janela"
+		if msg.strategy == terminal.Tmux {
+			where = "em nova janela do tmux"
+		}
+		d.status = fmt.Sprintf("✓ %s lançado %s — escolha outra demanda ou q para sair", msg.key, where)
 		return d, nil
 
 	case tea.KeyPressMsg:
@@ -146,6 +162,9 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 		}
 		switch {
 		case key.Matches(msg, d.keys.launch):
+			if d.launching {
+				return d, nil // a launch is already in flight; ignore until it finishes
+			}
 			if it, ok := d.list.SelectedItem().(issueItem); ok {
 				issue, agent := it.issue, d.currentAgent()
 				// Validate before launching so a bad config surfaces here in the
@@ -160,12 +179,16 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 				// hand off through the root (quit, then launch). Every other
 				// strategy opens the agent in its own window/tmux pane, so we
 				// launch from here and keep the dashboard open for the next one.
-				if terminal.Resolve(d.cfg.Launch.Strategy) == terminal.Inplace {
+				strategy := terminal.Resolve(d.cfg.Launch.Strategy)
+				if strategy == terminal.Inplace {
 					return d, func() tea.Msg { return launchMsg{issue: issue, agent: agent} }
 				}
+				// Pin the concrete strategy so the background launch can't fall
+				// back to an in-place handoff that would corrupt the live TUI.
+				plan.Strategy = strategy
 				d.launching = true
 				d.status = fmt.Sprintf("Lançando %s com %s…", issue.Key, agent)
-				return d, d.launchCmd(plan)
+				return d, d.launchCmd(plan, strategy)
 			}
 		case key.Matches(msg, d.keys.switchAgent):
 			if len(d.agentSet) > 0 {
@@ -195,7 +218,7 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 	return d, cmd
 }
 
-func (d dashboard) View() string {
+func (d dashboard) View(mas mascot) string {
 	mood := moodIdle
 	switch {
 	case d.loading || d.launching:
@@ -205,7 +228,7 @@ func (d dashboard) View() string {
 	case d.status != "":
 		mood = moodHappy
 	}
-	header := d.mascot.header("SprintMate", mood)
+	header := mas.header("SprintMate", mood)
 
 	var body string
 	switch {
@@ -230,6 +253,10 @@ func (d dashboard) View() string {
 	}
 	if d.notice != "" {
 		help = errStyle.Render("⚠ "+d.notice) + "\n" + help
+	}
+	if d.latest != "" {
+		notice := updateStyle.Render(fmt.Sprintf("↑ %s disponível — brew upgrade sprintmate", d.latest))
+		help = notice + "\n" + help
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer, help)
@@ -258,18 +285,39 @@ func (d dashboard) currentAgent() string {
 
 // launchCmd prepares and launches the agent in the background (a new window or
 // tmux pane), then reports the outcome so the dashboard can stay open.
-func (d dashboard) launchCmd(plan app.Plan) tea.Cmd {
-	cfg := d.cfg
+func (d dashboard) launchCmd(plan app.Plan, strategy string) tea.Cmd {
+	// Snapshot the config so the background goroutine never reads the live
+	// *config.Config that the settings wizard may concurrently rewrite. A value
+	// copy is enough here: PrepareAndLaunch only reads scalar fields, and the
+	// settings path never mutates the shared Agents map.
+	cfgCopy := *d.cfg
 	return func() tea.Msg {
-		err := app.PrepareAndLaunch(context.Background(), cfg, plan)
-		return launchedMsg{key: plan.Issue.Key, agent: plan.AgentName, err: err}
+		err := app.PrepareAndLaunch(context.Background(), &cfgCopy, plan)
+		return launchedMsg{key: plan.Issue.Key, agent: plan.AgentName, strategy: strategy, err: err}
+	}
+}
+
+// checkUpdate looks up the latest GitHub release in the background and reports
+// it only when it's newer than the running build. Errors are swallowed (returns
+// nil) so an offline or rate-limited check never surfaces — see update.Check.
+func (d dashboard) checkUpdate() tea.Cmd {
+	current := d.version
+	return func() tea.Msg {
+		if latest, newer := update.Check(context.Background(), current); newer {
+			return updateAvailableMsg{latest: latest}
+		}
+		return nil
 	}
 }
 
 func (d dashboard) loadIssues() tea.Cmd {
 	client, src := d.client, d.source
 	return func() tea.Msg {
-		res, err := client.FetchIssues(context.Background(), src)
+		// Bound the whole fetch (many sequential paginated calls) so a slow or
+		// unresponsive Jira can't leave the dashboard loading forever.
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		res, err := client.FetchIssues(ctx, src)
 		return issuesLoadedMsg{res: res, err: err}
 	}
 }
@@ -293,15 +341,6 @@ func sourceFromConfig(cfg *config.Config) jira.Source {
 		SprintFieldID:      cfg.Jira.Fields.Sprint,
 		StoryPointsFieldID: cfg.Jira.Fields.StoryPoints,
 	}
-}
-
-func indexOf(s []string, v string) int {
-	for i, x := range s {
-		if x == v {
-			return i
-		}
-	}
-	return -1
 }
 
 func orDash(s string) string {

@@ -36,6 +36,26 @@ func TestBranchName(t *testing.T) {
 	}
 }
 
+// An empty slug (punctuation/CJK-only title) must never yield a ref git rejects
+// such as a trailing "-" or "/"; it falls back to the key.
+func TestBranchNameEmptySlug(t *testing.T) {
+	cases := []struct{ pattern, key, title, want string }{
+		{"{key}-{slug}", "DEMO-1", "###", "demo-1"},
+		{"feature/{slug}", "DEMO-2", "###", "feature/demo-2"},
+		{"feature/{slug}", "DEMO-3", "Real title", "feature/real-title"},
+		{"{slug}", "DEMO-4", "", "demo-4"},
+	}
+	for _, c := range cases {
+		got := BranchName(c.pattern, c.key, c.title)
+		if got != c.want {
+			t.Errorf("BranchName(%q,%q,%q) = %q, want %q", c.pattern, c.key, c.title, got, c.want)
+		}
+		if got == "" || got[len(got)-1] == '/' || got[len(got)-1] == '-' {
+			t.Errorf("BranchName produced an invalid ref %q", got)
+		}
+	}
+}
+
 func TestBranchOpsInTempRepo(t *testing.T) {
 	if !Available() {
 		t.Skip("git not available")

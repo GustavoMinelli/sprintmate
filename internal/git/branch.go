@@ -8,9 +8,24 @@ const maxSlugLen = 50
 // BranchName builds a branch name from a pattern containing {key} and {slug}.
 // The key is lowercased and the title is slugified.
 func BranchName(pattern, key, title string) string {
-	name := strings.ReplaceAll(pattern, "{key}", strings.ToLower(strings.TrimSpace(key)))
-	name = strings.ReplaceAll(name, "{slug}", Slugify(title))
-	return strings.Trim(name, "-")
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	slug := Slugify(title)
+	// A punctuation/CJK-only title slugifies to "". Don't emit a branch that
+	// loses the issue identity (which would make branch reuse collide across
+	// issues): when the pattern carries no {key}, fill the {slug} slot with the
+	// key so the result stays unique; otherwise just drop the empty slug.
+	if slug == "" && !strings.Contains(pattern, "{key}") {
+		slug = lowerKey
+	}
+	name := strings.ReplaceAll(pattern, "{key}", lowerKey)
+	name = strings.ReplaceAll(name, "{slug}", slug)
+	// Trim separators left dangling by an empty slug (e.g. "{key}-{slug}" ->
+	// "demo-1-" or "feature/{slug}" -> "feature/"), which git rejects as a ref.
+	name = strings.Trim(name, "-/")
+	if name == "" {
+		return lowerKey
+	}
+	return name
 }
 
 // accents maps common Latin diacritics to their ASCII base letter so that

@@ -14,7 +14,11 @@ import (
 )
 
 // repo is the GitHub "owner/name" whose releases we check.
-const repo = "gustavodiasminelli/sprintmate"
+const repo = "GustavoMinelli/sprintmate"
+
+// apiBase is the GitHub API base URL. It is a package var so tests can point it
+// at an httptest server.
+var apiBase = "https://api.github.com"
 
 // Check returns the latest released version and true when it is newer than
 // current. It returns ("", false) on any error, when current is a dev build, or
@@ -23,22 +27,26 @@ func Check(ctx context.Context, current string) (latest string, newer bool) {
 	if isDev(current) {
 		return "", false
 	}
-
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	return checkWith(ctx, http.DefaultClient, apiBase, current)
+}
 
-	url := "https://api.github.com/repos/" + repo + "/releases/latest"
+// checkWith is the testable core of Check: it queries baseURL with client and
+// compares the latest release tag against current. Any error maps to no-update.
+func checkWith(ctx context.Context, client *http.Client, baseURL, current string) (latest string, newer bool) {
+	url := baseURL + "/repos/" + repo + "/releases/latest"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return "", false
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", false
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", false
 	}

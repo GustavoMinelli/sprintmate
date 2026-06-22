@@ -37,15 +37,18 @@ type model struct {
 	mascot     mascot
 	showSplash bool
 
+	version string // running build, threaded to the dashboard's update check
+
 	width, height int
 	result        *Result
 }
 
 // Run starts the TUI. cfg may be nil/incomplete (the wizard opens). When
 // startInWizard is true the wizard opens even if cfg is valid (settings mode).
+// version is the running build, used by the dashboard to flag a newer release.
 // It returns the possibly-updated config and an optional launch Result.
-func Run(cfg *config.Config, startInWizard bool) (*config.Config, *Result, error) {
-	m := newModel(cfg, startInWizard)
+func Run(cfg *config.Config, startInWizard bool, version string) (*config.Config, *Result, error) {
+	m := newModel(cfg, startInWizard, version)
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return cfg, nil, err
@@ -54,16 +57,16 @@ func Run(cfg *config.Config, startInWizard bool) (*config.Config, *Result, error
 	return fm.cfg, fm.result, nil
 }
 
-func newModel(cfg *config.Config, startInWizard bool) model {
+func newModel(cfg *config.Config, startInWizard bool, version string) model {
 	valid := cfg != nil && cfg.Validate() == nil
 	base := cfg
 	if base == nil {
 		base = config.Default()
 	}
 	if startInWizard || !valid {
-		return model{screen: screenWizard, wiz: newWizard(base, valid), cfg: base, showSplash: true}
+		return model{screen: screenWizard, wiz: newWizard(base, valid), cfg: base, showSplash: true, version: version}
 	}
-	return model{screen: screenDashboard, dash: newDashboard(cfg), cfg: cfg, showSplash: true}
+	return model{screen: screenDashboard, dash: newDashboard(cfg, version), cfg: cfg, showSplash: true, version: version}
 }
 
 func (m model) Init() tea.Cmd {
@@ -111,14 +114,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case wizardDoneMsg:
 		m.cfg = msg.cfg
-		m.dash = newDashboard(msg.cfg)
+		m.dash = newDashboard(msg.cfg, m.version)
 		m.dash, _ = m.dash.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 		m.screen = screenDashboard
 		return m, m.dash.Init()
 
 	case wizardCancelMsg:
 		if m.cfg != nil && m.cfg.Validate() == nil {
-			m.dash = newDashboard(m.cfg)
+			m.dash = newDashboard(m.cfg, m.version)
 			m.dash, _ = m.dash.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
 			m.screen = screenDashboard
 			return m, m.dash.Init()
@@ -145,11 +148,9 @@ func (m model) View() tea.View {
 	case m.showSplash:
 		content = splashView(m.mascot, m.width, m.height)
 	case m.screen == screenWizard:
-		m.wiz.mascot = m.mascot // share the root's animation frame
-		content = m.wiz.View()
+		content = m.wiz.View(m.mascot) // pass the root's animation frame
 	case m.screen == screenDashboard:
-		m.dash.mascot = m.mascot
-		content = m.dash.View()
+		content = m.dash.View(m.mascot)
 	}
 	v := tea.NewView(appStyle.Render(content))
 	v.AltScreen = true

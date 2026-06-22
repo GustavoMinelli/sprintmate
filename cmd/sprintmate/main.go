@@ -49,7 +49,7 @@ func main() {
 		startInWizard = true
 	}
 
-	newCfg, result, err := tui.Run(cfg, startInWizard)
+	newCfg, result, err := tui.Run(cfg, startInWizard, version)
 	if err != nil {
 		fatal(err)
 	}

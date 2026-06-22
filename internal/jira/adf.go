@@ -2,6 +2,7 @@ package jira
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -62,9 +63,9 @@ func renderNode(b *strings.Builder, n *adfNode, listPrefix string) {
 		renderNodes(b, n.Content, listPrefix)
 		b.WriteString("\n\n")
 	case "bulletList":
-		renderList(b, n.Content, "- ")
+		renderList(b, n.Content, false)
 	case "orderedList":
-		renderList(b, n.Content, "1. ")
+		renderList(b, n.Content, true)
 	case "listItem":
 		renderNodes(b, n.Content, listPrefix)
 	case "codeBlock":
@@ -119,13 +120,19 @@ func attrText(raw json.RawMessage, keys ...string) string {
 	return ""
 }
 
-func renderList(b *strings.Builder, items []adfNode, bullet string) {
+func renderList(b *strings.Builder, items []adfNode, ordered bool) {
+	n := 0
 	for i := range items {
 		var inner strings.Builder
 		renderNode(&inner, &items[i], "")
 		text := strings.TrimSpace(inner.String())
 		if text == "" {
 			continue
+		}
+		n++
+		bullet := "- "
+		if ordered {
+			bullet = fmt.Sprintf("%d. ", n)
 		}
 		// indent continuation lines of multi-line items
 		lines := strings.Split(text, "\n")

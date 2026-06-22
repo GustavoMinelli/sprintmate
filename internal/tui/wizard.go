@@ -2,11 +2,15 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
@@ -39,7 +43,6 @@ type wizard struct {
 	inputs  []textinput.Model // host, email, token
 	focus   int
 	testing bool
-	me      jira.Myself
 
 	client *jira.Client
 
@@ -64,8 +67,6 @@ type wizard struct {
 	// workdir step: type a folder; the folder search drills in on Enter, and a
 	// valid folder finishes the wizard. Every issue launches in this directory.
 	workdir textinput.Model
-
-	mascot mascot // animation frame is supplied by the root model
 
 	err           string
 	width, height int
@@ -106,7 +107,7 @@ func newWizard(cfg *config.Config, isSettings bool) wizard {
 		sprintOpts: []string{config.SprintActive, config.SprintFuture, config.SprintAll},
 		sprintCur:  sprintIndex(cfg.Jira.Sprint),
 		agentOpts:  agents.Names(),
-		agentCur:   max(0, indexOf(agents.Names(), cfg.Agent.Default)),
+		agentCur:   max(0, slices.Index(agents.Names(), cfg.Agent.Default)),
 		workdir:    wd,
 	}
 }
@@ -126,7 +127,6 @@ func (w wizard) Update(msg tea.Msg) (wizard, tea.Cmd) {
 			return w, nil
 		}
 		w.err = ""
-		w.me = msg.me
 		w.loading = true
 		return w, loadBoardsCmd(w.client)
 
@@ -311,7 +311,7 @@ func (w wizard) finish() (wizard, tea.Cmd) {
 	c.Jira.Email = w.email()
 	// Only persist a token the user actually typed. If they rely on the env var
 	// (blank input), keep it out of the file via the env provenance flag.
-	if !(w.token() == "" && os.Getenv(config.EnvToken) != "") {
+	if w.token() != "" || os.Getenv(config.EnvToken) == "" {
 		c.SetToken(w.token())
 	}
 	if len(w.boards) > 0 {
@@ -364,7 +364,7 @@ func (w wizard) refocus(i int) (wizard, tea.Cmd) {
 
 // --- view -----------------------------------------------------------------
 
-func (w wizard) View() string {
+func (w wizard) View(mas mascot) string {
 	mood := moodIdle
 	switch {
 	case w.testing || w.loading:
@@ -372,7 +372,7 @@ func (w wizard) View() string {
 	case w.err != "":
 		mood = moodError
 	}
-	title := w.mascot.header("SprintMate · Configuração", mood)
+	title := mas.header("SprintMate · Configuração", mood)
 
 	// Before we know the terminal size (first frame / tests) or on tiny windows,
 	// fall back to the compact, content-sized box.
@@ -591,7 +591,7 @@ func renderChoices(items []string, cursor int, checked map[int]bool) string {
 }
 
 func field(labelText string, ti textinput.Model, focused bool) string {
-	l := labelText + " "
+	var l string
 	if focused {
 		l = cursorStyle.Render("› " + labelText + " ")
 	} else {
@@ -676,7 +676,7 @@ func dirCompletion(value string) (base, leaf string, matches []string) {
 		base = homeDir()
 	}
 
-	dirs, _, err := listDir(base, 800)
+	dirs, err := listDir(base, 800)
 	if err != nil {
 		return base, leaf, nil
 	}
@@ -731,15 +731,15 @@ func renderDirCompletion(value string, width, height int) string {
 	return head + "\n\n" + strings.Join(lines, "\n")
 }
 
-// listDir lists up to limit entries of dir, sorted case-insensitively and split
-// into directories and files. The error is surfaced (e.g. permission denied) so
-// the browser can show why a folder can't be opened.
-func listDir(dir string, limit int) (dirs, files []string, err error) {
+// listDir lists up to limit subdirectories of dir, sorted case-insensitively.
+// The error is surfaced (e.g. permission denied) so the browser can show why a
+// folder can't be opened. The folder search is directories-only by design.
+func listDir(dir string, limit int) (dirs []string, err error) {
 	f, err := os.Open(dir)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	entries, _ := f.ReadDir(limit)
 	sort.Slice(entries, func(i, j int) bool {
@@ -748,11 +748,9 @@ func listDir(dir string, limit int) (dirs, files []string, err error) {
 	for _, e := range entries {
 		if e.IsDir() {
 			dirs = append(dirs, e.Name())
-		} else {
-			files = append(files, e.Name())
 		}
 	}
-	return dirs, files, nil
+	return dirs, nil
 }
 
 // truncate shortens s to at most max display columns, adding an ellipsis.
@@ -787,23 +785,33 @@ func cancelLabel(isSettings bool) string {
 	return "sair"
 }
 
+// wizardNetTimeout bounds each wizard network step so a slow Jira can't hang
+// the setup screen indefinitely.
+const wizardNetTimeout = 30 * time.Second
+
 func testConnCmd(c *jira.Client) tea.Cmd {
 	return func() tea.Msg {
-		me, err := c.TestConnection(context.Background())
-		return connTestedMsg{me: me, err: err}
+		ctx, cancel := context.WithTimeout(context.Background(), wizardNetTimeout)
+		defer cancel()
+		_, err := c.TestConnection(ctx)
+		return connTestedMsg{err: err}
 	}
 }
 
 func loadBoardsCmd(c *jira.Client) tea.Cmd {
 	return func() tea.Msg {
-		b, err := c.ListBoards(context.Background())
+		ctx, cancel := context.WithTimeout(context.Background(), wizardNetTimeout)
+		defer cancel()
+		b, err := c.ListBoards(ctx)
 		return boardsLoadedMsg{boards: b, err: err}
 	}
 }
 
 func loadColumnsCmd(c *jira.Client, boardID int) tea.Cmd {
 	return func() tea.Msg {
-		cols, err := c.BoardColumns(context.Background(), boardID)
+		ctx, cancel := context.WithTimeout(context.Background(), wizardNetTimeout)
+		defer cancel()
+		cols, err := c.BoardColumns(ctx, boardID)
 		return columnsLoadedMsg{cols: cols, err: err}
 	}
 }
@@ -841,8 +849,32 @@ func preselectColumns(cols []jira.Column, configured []string) map[int]bool {
 	return m
 }
 
+// friendlyErr maps the common connection failures to a plain Portuguese message
+// for the type-and-Enter audience, passing anything else through verbatim.
 func friendlyErr(err error) string {
-	return err.Error()
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, jira.ErrAuth) {
+		return err.Error() // already a clear, actionable sentence
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "tempo esgotado ao falar com o Jira — verifique o host e sua conexão"
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return "tempo esgotado ao falar com o Jira — verifique o host e sua conexão"
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return "não foi possível encontrar o host do Jira — verifique o endereço"
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "dial tcp") {
+		return "não foi possível conectar ao Jira — verifique o host e sua conexão"
+	}
+	return msg
 }
 
 func clampDec(i int) int {

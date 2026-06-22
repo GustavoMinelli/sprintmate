@@ -27,6 +27,11 @@ type Plan struct {
 	AgentName string
 	Dir       string
 	Branch    string
+	// Strategy is the launch strategy to use. It defaults to the configured
+	// value but callers may pin it to a concrete strategy (e.g. the dashboard
+	// resolves "auto" up front so a windowed launch can't silently degrade to
+	// an in-place handoff that would corrupt the running TUI).
+	Strategy string
 }
 
 // BuildPlan resolves the working directory and branch name for an issue without
@@ -40,7 +45,7 @@ func BuildPlan(cfg *config.Config, issue jira.Issue, agentName string) (Plan, er
 		return Plan{}, fmt.Errorf("a pasta de trabalho %q não existe", dir)
 	}
 	branch := git.BranchName(cfg.Git.BranchPattern, issue.Key, issue.Title)
-	return Plan{Issue: issue, AgentName: agentName, Dir: dir, Branch: branch}, nil
+	return Plan{Issue: issue, AgentName: agentName, Dir: dir, Branch: branch, Strategy: cfg.Launch.Strategy}, nil
 }
 
 // PrepareAndLaunch executes the plan: branch, context, agent launch.
@@ -84,13 +89,16 @@ func PrepareAndLaunch(ctx context.Context, cfg *config.Config, plan Plan) error 
 	}
 
 	// Agent command spec.
-	ac := cfg.Agents[plan.AgentName]
 	spec := agent.Spec(agents.Params{
-		Issue:       plan.Issue,
+		IssueKey:    plan.Issue.Key,
 		ContextPath: ctxPath,
 		Branch:      branchForAgent,
 		Dir:         plan.Dir,
-	}, agents.Config{Command: ac.Command, Args: ac.Args})
+	}, cfg.AgentConfig(plan.AgentName))
 
-	return terminal.Launch(spec, cfg.Launch.Strategy)
+	strategy := plan.Strategy
+	if strategy == "" {
+		strategy = cfg.Launch.Strategy
+	}
+	return terminal.Launch(spec, strategy)
 }

@@ -34,6 +34,30 @@ func TestShellLine(t *testing.T) {
 	}
 }
 
+func TestTmuxArgs(t *testing.T) {
+	got := tmuxArgs(Spec{Bin: "claude", Args: []string{".issue-context.md"}, Dir: "/home/u/p"})
+	if len(got) < 3 || got[0] != "new-window" || got[1] != "-c" || got[2] != "/home/u/p" {
+		t.Fatalf("tmuxArgs = %v, want new-window -c <dir> ...", got)
+	}
+	if cmd := got[len(got)-1]; !strings.HasPrefix(cmd, "claude") {
+		t.Errorf("tmux command = %q, want it to start with claude", cmd)
+	}
+	// Without a dir, there is no -c flag.
+	noDir := tmuxArgs(Spec{Bin: "claude"})
+	for _, a := range noDir {
+		if a == "-c" {
+			t.Errorf("unexpected -c without a dir: %v", noDir)
+		}
+	}
+}
+
+func TestShellLineFoldsEnv(t *testing.T) {
+	got := ShellLine(Spec{Bin: "claude", Env: []string{"K=V"}})
+	if !strings.Contains(got, "env K=V claude") {
+		t.Errorf("ShellLine with env = %q, want it to prefix env K=V", got)
+	}
+}
+
 func TestLaunchEmptyBin(t *testing.T) {
 	if err := Launch(Spec{}, Inplace); err == nil {
 		t.Error("expected error for empty bin")

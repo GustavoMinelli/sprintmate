@@ -77,7 +77,7 @@ func TestSourceFromConfig(t *testing.T) {
 }
 
 func TestDashboardLoadAndLaunch(t *testing.T) {
-	d := newDashboard(validCfg())
+	d := newDashboard(validCfg(), "dev")
 	d, _ = d.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 
 	res := jira.Result{
@@ -121,7 +121,7 @@ func TestDashboardLoadAndLaunch(t *testing.T) {
 func TestDashboardWindowedLaunchKeepsDashboard(t *testing.T) {
 	c := validCfg()
 	c.Launch.Strategy = config.StrategyWindow // launches in its own window
-	d := newDashboard(c)
+	d := newDashboard(c, "dev")
 	d, _ = d.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	d, _ = d.Update(issuesLoadedMsg{res: jira.Result{
 		Issues: []jira.Issue{{Key: "DEMO-1", Title: "Login", ProjectKey: "DEMO"}},
@@ -154,7 +154,7 @@ func TestDashboardWindowedLaunchKeepsDashboard(t *testing.T) {
 }
 
 func TestDashboardSettingsKey(t *testing.T) {
-	d := newDashboard(validCfg())
+	d := newDashboard(validCfg(), "dev")
 	d, _ = d.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	d, _ = d.Update(issuesLoadedMsg{res: jira.Result{}})
 	_, cmd := d.Update(keyPress("s"))
@@ -170,7 +170,7 @@ func TestWizardTransitions(t *testing.T) {
 	w := newWizard(config.Default(), false)
 	w.client = jira.New("h", "e", "t")
 
-	w, _ = w.Update(connTestedMsg{me: jira.Myself{AccountID: "x"}})
+	w, _ = w.Update(connTestedMsg{})
 	if !w.loading || w.err != "" {
 		t.Fatalf("after conn ok: loading=%v err=%q", w.loading, w.err)
 	}
@@ -238,7 +238,7 @@ func TestWizardFinishSavesConfig(t *testing.T) {
 }
 
 func TestRootScreenSwitching(t *testing.T) {
-	m := newModel(validCfg(), false)
+	m := newModel(validCfg(), false, "dev")
 	if m.screen != screenDashboard {
 		t.Fatalf("valid config should start on dashboard, got %d", m.screen)
 	}
@@ -257,10 +257,10 @@ func TestRootScreenSwitching(t *testing.T) {
 }
 
 func TestNewModelStartsWizardWhenInvalid(t *testing.T) {
-	if m := newModel(nil, false); m.screen != screenWizard {
+	if m := newModel(nil, false, "dev"); m.screen != screenWizard {
 		t.Error("nil config should start in wizard")
 	}
-	if m := newModel(config.Default(), false); m.screen != screenWizard {
+	if m := newModel(config.Default(), false, "dev"); m.screen != screenWizard {
 		t.Error("incomplete config should start in wizard")
 	}
 }

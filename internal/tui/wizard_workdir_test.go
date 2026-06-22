@@ -98,7 +98,7 @@ func TestResolveDirAnchorsRelativeToHome(t *testing.T) {
 func TestFilledViewFitsTerminal(t *testing.T) {
 	w := workdirWizard()
 	w.width, w.height = 100, 30
-	out := w.View()
+	out := w.View(mascot{})
 	if h := lipgloss.Height(out); h > 30 {
 		t.Errorf("rendered height %d exceeds terminal 30", h)
 	}

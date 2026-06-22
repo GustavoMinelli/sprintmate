@@ -1,0 +1,20 @@
+# golangci-lint configuration (v2 format).
+# Pinned alongside golangci-lint-action@v7 so the lint set is reproducible
+# and not tied to whatever "latest" happens to ship.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  exclusions:
+    rules:
+      # Test helpers frequently ignore write/encode errors for brevity.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt

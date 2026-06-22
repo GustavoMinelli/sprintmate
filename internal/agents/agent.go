@@ -7,17 +7,19 @@
 package agents
 
 import (
+	"maps"
 	"os/exec"
-	"sort"
+	"slices"
 	"strings"
 
-	"github.com/GustavoMinelli/sprintmate/internal/jira"
 	"github.com/GustavoMinelli/sprintmate/internal/terminal"
 )
 
-// Params carries everything an agent may need to build its launch command.
+// Params carries everything an agent may need to build its launch command. It
+// is deliberately free of any issue-source type so the agent layer stays
+// source-agnostic.
 type Params struct {
-	Issue       jira.Issue
+	IssueKey    string
 	ContextPath string // path to the generated .issue-context.md
 	Branch      string
 	Dir         string // working directory for the agent
@@ -57,12 +59,7 @@ func Get(name string) (Agent, bool) {
 
 // Names returns all registered agent names, sorted.
 func Names() []string {
-	names := make([]string, 0, len(registry))
-	for n := range registry {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	return names
+	return slices.Sorted(maps.Keys(registry))
 }
 
 // Installed returns the names of registered agents whose command is on PATH.
@@ -120,7 +117,7 @@ func (b builtin) Spec(p Params, cfg Config) terminal.Spec {
 func ExpandArgs(args []string, p Params) []string {
 	repl := strings.NewReplacer(
 		"{context_file}", p.ContextPath,
-		"{key}", p.Issue.Key,
+		"{key}", p.IssueKey,
 		"{branch}", p.Branch,
 		"{dir}", p.Dir,
 	)

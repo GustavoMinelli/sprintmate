@@ -8,9 +8,13 @@ import (
 	"os/exec"
 )
 
-// hasWindow assumes a GUI is present on macOS desktops; if osascript can't open
-// a window (e.g. over SSH) the auto strategy falls back to in-place.
+// hasWindow reports whether a GUI Terminal can be opened. Over SSH there is no
+// desktop session, so osascript would fail; reporting false here keeps Resolve's
+// prediction in step with autoLaunch's in-place fallback.
 func hasWindow() bool {
+	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+		return false
+	}
 	_, err := exec.LookPath("osascript")
 	return err == nil
 }

@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,10 +26,19 @@ type Client struct {
 	http  *http.Client
 }
 
-// New builds a client. host is normalized (scheme added, trailing slash trimmed).
+// New builds a client. host is normalized (scheme added, trailing slash
+// trimmed). A plain http:// host pointing at a remote server is upgraded to
+// https:// so the Basic-auth credentials are never sent in cleartext; http to
+// loopback (localhost/127.0.0.1) is left intact for local dev and testing.
 func New(host, email, token string) *Client {
 	host = strings.TrimRight(strings.TrimSpace(host), "/")
-	if host != "" && !strings.Contains(host, "://") {
+	switch {
+	case host == "":
+	case strings.HasPrefix(host, "http://"):
+		if !isLoopbackHost(host) {
+			host = "https://" + strings.TrimPrefix(host, "http://")
+		}
+	case !strings.Contains(host, "://"):
 		host = "https://" + host
 	}
 	return &Client{
@@ -47,60 +57,123 @@ func (c *Client) BrowseURL(key string) string {
 	return c.host + "/browse/" + key
 }
 
+// maxRetries bounds how many times do() retries a rate-limited or transient
+// server error before giving up.
+const maxRetries = 3
+
 // do performs an authenticated request and decodes a JSON response into out.
+// A 429 (rate limit) or transient 5xx is retried a bounded number of times,
+// honoring any Retry-After header and the context deadline.
 func (c *Client) do(ctx context.Context, method, path string, query url.Values, body, out any) error {
 	u := c.host + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
 
-	var reader io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		b, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("encoding request: %w", err)
 		}
-		reader = bytes.NewReader(b)
+		bodyBytes = b
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, u, reader)
-	if err != nil {
-		return fmt.Errorf("building request: %w", err)
-	}
-	auth := base64.StdEncoding.EncodeToString([]byte(c.email + ":" + c.token))
-	req.Header.Set("Authorization", "Basic "+auth)
-	req.Header.Set("Accept", "application/json")
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return fmt.Errorf("requesting %s: %w", path, err)
-	}
-	defer resp.Body.Close()
-
-	data, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return ErrAuth
-	}
-	if readErr != nil {
-		return fmt.Errorf("reading response from %s: %w", path, readErr)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("jira %s %s: %s: %s", method, path, resp.Status, apiMessage(data))
-	}
-	if out != nil && len(data) > 0 {
-		if looksLikeHTML(resp.Header.Get("Content-Type"), data) {
-			return fmt.Errorf("jira %s %s returned an HTML page instead of JSON (status %s from %s): "+
-				"check that the host is your Atlassian site (e.g. https://your-domain.atlassian.net) and "+
-				"that requests aren't being redirected to an SSO/login or proxy page", method, path, resp.Status, resp.Request.URL.Host)
+	for attempt := 0; ; attempt++ {
+		var reader io.Reader
+		if bodyBytes != nil {
+			reader = bytes.NewReader(bodyBytes)
 		}
-		if err := json.Unmarshal(data, out); err != nil {
-			return fmt.Errorf("decoding response from %s: %w", path, err)
+		req, err := http.NewRequestWithContext(ctx, method, u, reader)
+		if err != nil {
+			return fmt.Errorf("building request: %w", err)
+		}
+		auth := base64.StdEncoding.EncodeToString([]byte(c.email + ":" + c.token))
+		req.Header.Set("Authorization", "Basic "+auth)
+		req.Header.Set("Accept", "application/json")
+		if bodyBytes != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+		resp, err := c.http.Do(req)
+		if err != nil {
+			return fmt.Errorf("requesting %s: %w", path, err)
+		}
+
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		_ = resp.Body.Close()
+
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return ErrAuth
+		}
+
+		// Retry rate limits and transient upstream errors with backoff.
+		if attempt < maxRetries && retryable(resp.StatusCode) {
+			if err := wait(ctx, backoff(resp.Header.Get("Retry-After"), attempt)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		if readErr != nil {
+			return fmt.Errorf("reading response from %s: %w", path, readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fmt.Errorf("jira %s %s: %s: %s", method, path, resp.Status, apiMessage(data))
+		}
+		if out != nil && len(data) > 0 {
+			if looksLikeHTML(resp.Header.Get("Content-Type"), data) {
+				return fmt.Errorf("jira %s %s returned an HTML page instead of JSON (status %s from %s): "+
+					"check that the host is your Atlassian site (e.g. https://your-domain.atlassian.net) and "+
+					"that requests aren't being redirected to an SSO/login or proxy page", method, path, resp.Status, resp.Request.URL.Host)
+			}
+			if err := json.Unmarshal(data, out); err != nil {
+				return fmt.Errorf("decoding response from %s: %w", path, err)
+			}
+		}
+		return nil
+	}
+}
+
+// retryable reports whether a status code is worth retrying.
+func retryable(status int) bool {
+	switch status {
+	case http.StatusTooManyRequests, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+// backoff computes the delay before the next attempt, preferring a Retry-After
+// header (seconds) and otherwise using exponential backoff capped at 8s.
+func backoff(retryAfter string, attempt int) time.Duration {
+	if retryAfter != "" {
+		if secs, err := strconv.Atoi(strings.TrimSpace(retryAfter)); err == nil && secs >= 0 {
+			d := time.Duration(secs) * time.Second
+			if d > 30*time.Second {
+				d = 30 * time.Second // never stall the TUI for too long
+			}
+			return d
 		}
 	}
-	return nil
+	d := time.Duration(1<<attempt) * time.Second
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d
+}
+
+// wait sleeps for d or returns early if the context is cancelled.
+func wait(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // looksLikeHTML reports whether a response body is an HTML/XML document rather
@@ -253,6 +326,17 @@ func (c *Client) ListSprints(ctx context.Context, boardID int, state string) ([]
 		startAt += len(page.Values)
 	}
 	return sprints, nil
+}
+
+// isLoopbackHost reports whether an http:// URL points at the local machine,
+// where cleartext is acceptable (local dev / tests).
+func isLoopbackHost(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	h := u.Hostname()
+	return h == "localhost" || h == "::1" || strings.HasPrefix(h, "127.")
 }
 
 func isDigits(s string) bool {

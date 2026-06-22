@@ -84,14 +84,19 @@ func tmuxLaunch(spec Spec) error {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		return fmt.Errorf("tmux not found")
 	}
+	c := exec.Command("tmux", tmuxArgs(spec)...)
+	c.Env = environ(spec)
+	return c.Run()
+}
+
+// tmuxArgs builds the `tmux new-window [-c dir] <command>` argv. Split out from
+// tmuxLaunch so the argument shape can be unit-tested without spawning tmux.
+func tmuxArgs(spec Spec) []string {
 	args := []string{"new-window"}
 	if spec.Dir != "" {
 		args = append(args, "-c", spec.Dir)
 	}
-	args = append(args, shellJoin(append([]string{spec.Bin}, spec.Args...)))
-	c := exec.Command("tmux", args...)
-	c.Env = environ(spec)
-	return c.Run()
+	return append(args, shellJoin(append([]string{spec.Bin}, spec.Args...)))
 }
 
 func inplaceLaunch(spec Spec) error {
@@ -127,9 +132,18 @@ func environ(spec Spec) []string {
 }
 
 // ShellLine builds a `cd <dir> && exec <cmd>` shell line used by GUI launchers
-// that run a shell.
+// that run a shell. Any spec.Env is folded into the command via an `env` prefix
+// so it survives even when the spawned shell doesn't inherit our environment
+// (e.g. a macOS Terminal window opened via osascript).
 func ShellLine(spec Spec) string {
 	cmd := shellJoin(append([]string{spec.Bin}, spec.Args...))
+	if len(spec.Env) > 0 {
+		prefix := "env"
+		for _, kv := range spec.Env {
+			prefix += " " + shellQuote(kv)
+		}
+		cmd = prefix + " " + cmd
+	}
 	if spec.Dir == "" {
 		return cmd
 	}

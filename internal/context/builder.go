@@ -42,7 +42,10 @@ var ignoredDirs = map[string]bool{
 func (b *Builder) Build(ctx context.Context, issue jira.Issue, projectDir string) (string, error) {
 	md := b.render(ctx, issue, projectDir)
 	path := filepath.Join(projectDir, Filename)
-	if err := os.WriteFile(path, []byte(md), 0o644); err != nil {
+	// 0o600: the file aggregates the full issue (description, comments, author
+	// names) and may contain sensitive data, so keep it owner-only — matching
+	// how config.Save guards the API token.
+	if err := os.WriteFile(path, []byte(md), 0o600); err != nil {
 		return "", fmt.Errorf("writing context file: %w", err)
 	}
 	return path, nil

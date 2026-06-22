@@ -54,7 +54,7 @@ launches your agent — already loaded with the task context.
 - **Smart launch** — opens the agent in a tmux window, a new terminal window, or
   in-place, auto-detected and configurable. Windowed/tmux launches **keep the
   dashboard open** so you can fire off several issues back to back.
-- **Workspace mapping** — maps each Jira project to a local directory.
+- **Single workspace** — one working directory where every issue's agent launches.
 - No database, no daemon. A single static binary. macOS, Linux and Windows.
 
 ## Install

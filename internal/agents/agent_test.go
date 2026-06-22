@@ -2,8 +2,6 @@ package agents
 
 import (
 	"testing"
-
-	"github.com/GustavoMinelli/sprintmate/internal/jira"
 )
 
 func TestRegistry(t *testing.T) {
@@ -37,7 +35,7 @@ func TestIsInstalled(t *testing.T) {
 
 func TestExpandArgs(t *testing.T) {
 	p := Params{
-		Issue:       jira.Issue{Key: "DEMO-123"},
+		IssueKey:    "DEMO-123",
 		ContextPath: "/p/.issue-context.md",
 		Branch:      "demo-123-x",
 		Dir:         "/p",
@@ -56,7 +54,7 @@ func TestExpandArgs(t *testing.T) {
 
 func TestExpandArgsDropsEmpty(t *testing.T) {
 	// {context_file} with no path should be dropped, not passed as "".
-	got := ExpandArgs([]string{"{context_file}"}, Params{Issue: jira.Issue{Key: "X"}})
+	got := ExpandArgs([]string{"{context_file}"}, Params{IssueKey: "X"})
 	if len(got) != 0 {
 		t.Errorf("expected empty args, got %v", got)
 	}

@@ -10,7 +10,6 @@ var (
 	colorMuted   = lipgloss.Color("#626262")
 	colorErr     = lipgloss.Color("#F87171")
 	colorOK      = lipgloss.Color("#6EE7B7")
-	colorText    = lipgloss.Color("#EEEEEE")
 	colorInk     = lipgloss.Color("#111827") // dark text for light badges
 )
 
@@ -45,6 +44,7 @@ var (
 	helpStyle   = lipgloss.NewStyle().Foreground(colorMuted)
 	errStyle    = lipgloss.NewStyle().Foreground(colorErr).Bold(true)
 	okStyle     = lipgloss.NewStyle().Foreground(colorOK)
+	updateStyle = lipgloss.NewStyle().Foreground(colorOK).Bold(true)
 	cursorStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
 	selStyle    = lipgloss.NewStyle().Foreground(colorAccent)
 	dimStyle    = lipgloss.NewStyle().Foreground(colorMuted)
@@ -65,7 +65,6 @@ var (
 
 	panelTitleStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
 	dirStyle        = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true) // directories in the preview
-	fileStyle       = lipgloss.NewStyle().Foreground(colorText)
 
 	// mascotLineStyle styles the buddy's little spoken line next to the title.
 	mascotLineStyle = lipgloss.NewStyle().Foreground(colorMuted).Italic(true)
