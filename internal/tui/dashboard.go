@@ -63,16 +63,21 @@ type dashboard struct {
 	version string // the running build, compared against the latest release
 	latest  string // newer release found on GitHub, "" when up to date/unknown
 
+	// qstats is a queue snapshot pushed by the root (the dashboard has no access
+	// to the engine, which lives on the monitor). Refreshed on the mascot tick.
+	qstats queueStats
+
 	width, height int
 }
 
 func newDashboard(cfg *config.Config, version string) dashboard {
 	l := list.New(nil, newIssueDelegate(), 0, 0)
 	l.SetShowTitle(false) // we render our own header
+	l.SetShowHelp(false)  // the frame renders a single, authoritative hints line
 	l.DisableQuitKeybindings()
 
-	// The list ships with a purple filter cursor; recolor it to the accent.
-	l.Styles.Filter.Cursor.Color = colorAccent
+	// The list ships with a purple filter cursor; recolor it to the active accent.
+	l.Styles.Filter.Cursor.Color = colorActive
 
 	// Apply the user's configured keys to the list's own navigation/filter
 	// bindings so they actually take effect.
@@ -113,8 +118,15 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		d.width, d.height = msg.Width, msg.Height
-		// Leave room for the taller mascot header (sprite + spacing + footer/help).
-		d.list.SetSize(max(10, msg.Width-4), max(5, msg.Height-12))
+		// In the two-column layout the list only owns the left pane; otherwise it
+		// takes the full body width. The frame computes the body region (no more
+		// magic numbers) — see computeLayout.
+		lay := computeLayout(msg.Width, msg.Height, true)
+		listW := lay.bodyWidth
+		if lay.twoColumn {
+			listW = leftPaneWidth(lay.bodyWidth)
+		}
+		d.list.SetSize(max(10, listW), max(5, lay.bodyHeight))
 		return d, nil
 
 	case errMsg:
@@ -206,10 +218,21 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 				d.notice = ""
 				return d, openURLCmd(it.issue.URL)
 			}
+		case key.Matches(msg, d.keys.enqueue):
+			if it, ok := d.list.SelectedItem().(issueItem); ok {
+				issue, agent := it.issue, d.currentAgent()
+				d.notice = ""
+				d.status = fmt.Sprintf("queuing %s for an autonomous run…", issue.Key)
+				return d, func() tea.Msg { return enqueueMsg{issue: issue, agent: agent} }
+			}
+		case key.Matches(msg, d.keys.monitor):
+			return d, func() tea.Msg { return openMonitorMsg{} }
 		case key.Matches(msg, d.keys.settings):
 			return d, func() tea.Msg { return openSettingsMsg{} }
 		case key.Matches(msg, d.keys.quit):
-			return d, tea.Quit
+			// Route through the root so it can cancel running autonomous jobs
+			// instead of orphaning their agent subprocesses.
+			return d, func() tea.Msg { return requestQuitMsg{} }
 		}
 	}
 
@@ -217,6 +240,11 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 	d.list, cmd = d.list.Update(msg)
 	return d, cmd
 }
+
+// panelInsetX/Y are panelStyle's frame cost: RoundedBorder (2) + Padding(0,1)
+// => 2 horizontal padding, so 4 columns / 2 rows total.
+const panelInsetX = 4
+const panelInsetY = 2
 
 func (d dashboard) View(mas mascot) string {
 	mood := moodIdle
@@ -228,28 +256,144 @@ func (d dashboard) View(mas mascot) string {
 	case d.status != "":
 		mood = moodHappy
 	}
-	header := mas.header("SprintMate", mood)
 
-	var body string
+	lay := computeLayout(d.width, d.height, true)
+	return renderFrame(chrome{
+		header: mas.header("SprintMate", mood),
+		strip:  d.queueStrip(lay.bodyWidth),
+		body:   d.bodyView(lay),
+		footer: d.footerView(),
+		hints:  d.hintsView(),
+	})
+}
+
+// queueStrip is the autonomous-queue activity line under the header, fed by the
+// snapshot the root pushes (see model.queueSnapshot). Running glows the accent
+// when something is actually in flight.
+func (d dashboard) queueStrip(w int) string {
+	q := d.qstats
+	if !q.active {
+		return dimStyle.Render("Queue idle — press e on an issue to start an autonomous run")
+	}
+	running := fmt.Sprintf("%d/%d", q.running, q.slots)
+	runStyle := footerValueStyle
+	if q.running > 0 {
+		runStyle = activeStyle
+	}
+	sep := dimStyle.Render("   ·   ")
+	line := footerLabelStyle.Render("Running ") + runStyle.Render(running) +
+		sep + footerLabelStyle.Render("Pending ") + footerValueStyle.Render(fmt.Sprint(q.pending)) +
+		sep + footerLabelStyle.Render("Awaiting approval ") + footerValueStyle.Render(fmt.Sprint(q.awaiting))
+	return lipgloss.NewStyle().Width(w).Render(line)
+}
+
+// bodyView is the list alone (narrow) or the list + detail panel (wide).
+func (d dashboard) bodyView(lay frameLayout) string {
 	switch {
 	case d.loading:
-		body = dimStyle.Render("  Loading issues from Jira...")
+		return dimStyle.Render("  Loading issues from Jira...")
 	case d.err != "":
-		body = errStyle.Render("  Error: "+d.err) + "\n\n" +
+		return errStyle.Render("  Error: "+d.err) + "\n\n" +
 			helpStyle.Render("  r: retry   ·   s: settings   ·   q: quit")
-	default:
-		body = d.list.View()
 	}
 
+	listView := d.list.View()
+	if !lay.twoColumn {
+		return listView
+	}
+
+	leftW := leftPaneWidth(lay.bodyWidth)
+	rightW := lay.bodyWidth - leftW - paneGap
+	// Fix the left column's width so the detail panel sits at a stable x even when
+	// list rows are short.
+	left := lipgloss.NewStyle().Width(leftW).Height(lay.bodyHeight).Render(listView)
+	right := panelStyle.Width(rightW).Height(lay.bodyHeight).MaxHeight(lay.bodyHeight).
+		Render(d.detailView(rightW-panelInsetX, lay.bodyHeight-panelInsetY))
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, strings.Repeat(" ", paneGap), right)
+}
+
+// detailView renders the selected issue's full info for the right pane, clamped
+// to w columns × h rows so it never overflows the panel.
+func (d dashboard) detailView(w, h int) string {
+	it, ok := d.list.SelectedItem().(issueItem)
+	if !ok {
+		return dimStyle.Render("No issue selected.")
+	}
+	is := it.issue
+
+	lines := []string{
+		panelTitleStyle.Render(truncate(is.Key, w)),
+		footerValueStyle.Render(truncate(is.Title, w)),
+		"",
+		detailRow("Status", statusValue(is.Status)),
+	}
+	if is.Priority != "" {
+		lines = append(lines, detailRow("Priority", footerValueStyle.Render(is.Priority)))
+	}
+	if is.StoryPoints > 0 {
+		lines = append(lines, detailRow("Points", footerValueStyle.Render(fmt.Sprintf("%g", is.StoryPoints))))
+	}
+	lines = append(lines, detailRow("Assignee", orValue(is.Assignee, "unassigned")))
+	if is.Sprint != "" {
+		lines = append(lines, detailRow("Sprint", footerValueStyle.Render(is.Sprint)))
+	}
+	if is.ProjectKey != "" {
+		lines = append(lines, detailRow("Project", footerValueStyle.Render(is.Project)))
+	}
+	if len(is.Labels) > 0 {
+		lines = append(lines, detailRow("Labels", footerValueStyle.Render(truncate(strings.Join(is.Labels, ", "), max(1, w-8)))))
+	}
+	if desc := strings.TrimSpace(is.Description); desc != "" {
+		lines = append(lines, "", labelStyle.Render("Description"))
+		wrapped := lipgloss.NewStyle().Width(w).Render(desc)
+		lines = append(lines, strings.Split(wrapped, "\n")...)
+	}
+
+	if len(lines) > h {
+		lines = lines[:max(0, h)]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// detailRow is a "Label: value" line; value is expected pre-styled.
+func detailRow(label, value string) string {
+	return labelStyle.Render(label+": ") + value
+}
+
+// statusValue paints the status in the accent when it reads as in-progress.
+func statusValue(status string) string {
+	if status == "" {
+		return dimStyle.Render("-")
+	}
+	s := strings.ToLower(status)
+	if strings.Contains(s, "progress") || strings.Contains(s, "doing") || strings.Contains(s, "review") {
+		return activeStyle.Render(status)
+	}
+	return footerValueStyle.Render(status)
+}
+
+func orValue(s, fallback string) string {
+	if strings.TrimSpace(s) == "" {
+		return dimStyle.Render(fallback)
+	}
+	return footerValueStyle.Render(s)
+}
+
+// footerView is the board / sprint / agent status bar.
+func (d dashboard) footerView() string {
 	board := d.boardName
 	if board == "" {
 		board = "-"
 	}
 	sep := "    "
-	footer := footerLabelStyle.Render("Board: ") + footerValueStyle.Render(board) +
+	return footerLabelStyle.Render("Board: ") + footerValueStyle.Render(board) +
 		sep + footerLabelStyle.Render("Sprint: ") + footerValueStyle.Render(orDash(d.sprintLabel)) +
 		sep + footerLabelStyle.Render("Agent: ") + footerValueStyle.Render(d.currentAgent())
-	help := helpStyle.Render("↑/↓ navigate · enter open · tab agent · / search · r refresh · o browser · s settings · q quit")
+}
+
+// hintsView is the key-hints line plus any transient status / notice / update banner.
+func (d dashboard) hintsView() string {
+	help := helpStyle.Render("↑/↓ navigate · enter open · e queue · m monitor · tab agent · / search · r refresh · o browser · s settings · q quit")
 	if d.status != "" {
 		help = okStyle.Render(d.status) + "\n" + help
 	}
@@ -260,21 +404,21 @@ func (d dashboard) View(mas mascot) string {
 		notice := updateStyle.Render(fmt.Sprintf("↑ %s available — brew upgrade sprintmate", d.latest))
 		help = notice + "\n" + help
 	}
-
-	return lipgloss.JoinVertical(lipgloss.Left, header, "", body, "", footer, help)
+	return help
 }
 
 // newIssueDelegate is the list's row renderer with the selector recolored to
 // our palette (the stock delegate highlights the selected row in purple).
 func newIssueDelegate() list.DefaultDelegate {
 	d := list.NewDefaultDelegate()
+	// The selected row is "what's selected" → the signature accent (border + title).
 	d.Styles.SelectedTitle = d.Styles.SelectedTitle.
-		BorderForeground(colorPrimary).
-		Foreground(colorAccent)
+		BorderForeground(colorActive).
+		Foreground(colorActive)
 	d.Styles.SelectedDesc = d.Styles.SelectedDesc.
-		BorderForeground(colorPrimary).
+		BorderForeground(colorActive).
 		Foreground(colorPrimary)
-	d.Styles.FilterMatch = d.Styles.FilterMatch.Foreground(colorAccent)
+	d.Styles.FilterMatch = d.Styles.FilterMatch.Foreground(colorActive)
 	return d
 }
 

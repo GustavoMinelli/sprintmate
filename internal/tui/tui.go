@@ -15,6 +15,8 @@ type screen int
 const (
 	screenWizard screen = iota
 	screenDashboard
+	screenMonitor
+	screenReview
 )
 
 var appStyle = lipgloss.NewStyle().Padding(1, 2)
@@ -31,6 +33,7 @@ type model struct {
 	screen screen
 	wiz    wizard
 	dash   dashboard
+	mon    monitor // autonomous queue; created lazily, outlives screen switches
 	cfg    *config.Config
 
 	// mascot ticks once at the root so a single animation drives every screen.
@@ -86,9 +89,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// fall through so the active screen also receives the size
 	}
 
-	// The mascot animation is owned here so only one tick chain runs.
+	// The mascot animation is owned here so only one tick chain runs. The tick is
+	// also the dashboard's queue-strip clock: it fires every ~380ms on every
+	// screen, so the strip stays live while jobs advance in the background.
 	if _, ok := msg.(mascotTickMsg); ok {
 		m.mascot = m.mascot.tick()
+		m.dash.qstats = m.queueSnapshot()
 		return m, mascotTickCmd()
 	}
 
@@ -105,6 +111,64 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case launchMsg:
 		m.result = &Result{Launch: true, Issue: msg.issue, Agent: msg.agent}
 		return m, tea.Quit
+
+	case enqueueMsg:
+		// Queue the job but stay on the current screen, so several issues can be
+		// enqueued from the dashboard before opening the monitor.
+		m.ensureMonitor()
+		var cmd tea.Cmd
+		m.mon, cmd = m.mon.Update(msg)
+		return m, cmd
+
+	case openMonitorMsg:
+		m.ensureMonitor()
+		m.screen = screenMonitor
+		var cmd tea.Cmd
+		m.mon, cmd = m.mon.Update(msg)
+		return m, cmd
+
+	case jobPreparedMsg, phaseDoneMsg, approveJobMsg, planLoadedMsg, diffLoadedMsg, shipDoneMsg:
+		// Engine/supervision/review-async messages always reach the monitor, so
+		// jobs keep advancing while the user is on the dashboard or in review.
+		if m.mon.eng == nil {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.mon, cmd = m.mon.Update(msg)
+		return m, cmd
+
+	case openReviewMsg:
+		m.screen = screenReview
+		var cmd tea.Cmd
+		m.mon, cmd = m.mon.Update(msg)
+		return m, cmd
+
+	case backToMonitorMsg:
+		m.screen = screenMonitor
+		m.mon.inReview = false
+		return m, nil
+
+	case backToDashboardMsg:
+		m.screen = screenDashboard
+		return m, nil
+
+	case requestQuitMsg:
+		// Quit requested from the dashboard. If autonomous jobs are running, send
+		// the user to the monitor to confirm (so their agents aren't orphaned);
+		// otherwise cancel any monitor context and quit.
+		if m.mon.eng != nil && m.mon.eng.Active() > 0 {
+			m.screen = screenMonitor
+			m.mon.confirmingQuit = true
+			m.mon.notice = "jobs are running — press q again to stop them and quit"
+			return m, nil
+		}
+		if m.mon.eng != nil {
+			return m, tea.Sequence(m.mon.cancelCmd(), tea.Quit)
+		}
+		return m, tea.Quit
+
+	case quitConfirmedMsg:
+		return m, tea.Sequence(m.mon.cancelCmd(), tea.Quit)
 
 	case openSettingsMsg:
 		m.screen = screenWizard
@@ -135,11 +199,42 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.wiz, cmd = m.wiz.Update(msg)
 		return m, cmd
 	case screenDashboard:
+		m.dash.qstats = m.queueSnapshot() // keep the strip fresh on navigation frames too
 		var cmd tea.Cmd
 		m.dash, cmd = m.dash.Update(msg)
 		return m, cmd
+	case screenMonitor, screenReview:
+		var cmd tea.Cmd
+		m.mon, cmd = m.mon.Update(msg)
+		return m, cmd
 	}
 	return m, nil
+}
+
+// ensureMonitor lazily creates the queue monitor on first use and sizes it.
+func (m *model) ensureMonitor() {
+	if m.mon.eng == nil {
+		m.mon = newMonitor(m.cfg)
+		m.mon, _ = m.mon.Update(tea.WindowSizeMsg{Width: m.width, Height: m.height})
+	}
+}
+
+// queueSnapshot reads the live queue counts off the engine. The root is the only
+// place that knows about both the dashboard and the monitor, and it runs on the
+// Bubble Tea update goroutine — the same one that mutates the (lock-free) engine
+// — so these reads are safe. It returns an inactive snapshot until the monitor
+// (and its engine) exist.
+func (m model) queueSnapshot() queueStats {
+	if m.mon.eng == nil {
+		return queueStats{active: false}
+	}
+	return queueStats{
+		running:  m.mon.eng.Active(),
+		slots:    m.cfg.Queue.Concurrency,
+		pending:  m.mon.eng.Pending(),
+		awaiting: m.mon.eng.AwaitingApproval(),
+		active:   true,
+	}
 }
 
 func (m model) View() tea.View {
@@ -151,6 +246,10 @@ func (m model) View() tea.View {
 		content = m.wiz.View(m.mascot) // pass the root's animation frame
 	case m.screen == screenDashboard:
 		content = m.dash.View(m.mascot)
+	case m.screen == screenMonitor:
+		content = m.mon.View(m.mascot)
+	case m.screen == screenReview:
+		content = m.mon.review.View(m.mascot)
 	}
 	v := tea.NewView(appStyle.Render(content))
 	v.AltScreen = true

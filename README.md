@@ -41,7 +41,12 @@ launches your agent — already loaded with the task context.
 
 ## Features
 
-- **Modern TUI** built on the Charm stack (Bubble Tea / Bubbles / Lip Gloss v2).
+- **Modern TUI** built on the Charm stack (Bubble Tea / Bubbles / Lip Gloss v2),
+  with a **responsive multi-pane layout** that fills the terminal and collapses to
+  a single column when it's narrow.
+- **Master-detail dashboard** — the issue list sits beside a live **detail panel**
+  (status, priority, story points, **assignee**, labels, sprint, description) and a
+  **queue activity strip** so the autonomous runs are always in view.
 - **Guided setup wizard** — configure everything from a screen, no YAML editing.
   Connect to Jira and pick your **board, columns and sprint from live lists**.
 - **Configurable issue source** — board, columns/statuses, sprint, assignee, or a
@@ -54,6 +59,10 @@ launches your agent — already loaded with the task context.
 - **Smart launch** — opens the agent in a tmux window, a new terminal window, or
   in-place, auto-detected and configurable. Windowed/tmux launches **keep the
   dashboard open** so you can fire off several issues back to back.
+- **Autonomous queue** — enqueue issues for **headless** agent runs under a
+  concurrency limit, each isolated in its **own git worktree**, gated by a
+  **plan → approve → execute** flow. Inspect the captured **plan and diff side by
+  side** in the review screen, then **ship** (open a PR) when enabled.
 - **Single workspace** — one working directory where every issue's agent launches.
 - No database, no daemon. A single static binary. macOS, Linux and Windows.
 
@@ -120,6 +129,8 @@ reference.
 |----------------|------------------------------|
 | <kbd>↑</kbd>/<kbd>k</kbd>, <kbd>↓</kbd>/<kbd>j</kbd> | Navigate issues |
 | <kbd>Enter</kbd> | Launch agent for the selected issue |
+| <kbd>e</kbd>     | Enqueue an autonomous run    |
+| <kbd>m</kbd>     | Open the queue monitor       |
 | <kbd>Tab</kbd>   | Switch agent                 |
 | <kbd>r</kbd>     | Refresh from Jira            |
 | <kbd>o</kbd>     | Open the issue in the browser|
@@ -178,10 +189,13 @@ internal/
   config/              # YAML load/save/validate, env override, keymap
   jira/                # REST + Agile client, board/columns/sprint, ADF→md
   agents/              # Agent interface + registry (claude/, codex/)
-  git/                 # branch create/reuse, slug, recent commits
+  git/                 # branch create/reuse, slug, recent commits, worktrees, diff
   context/             # .issue-context.md builder
   terminal/            # launch strategies (tmux/window/inplace)
-  tui/                 # Bubble Tea v2: wizard + dashboard
+  queue/               # autonomous-run engine (plan→approve→execute, concurrency)
+  forge/               # pull-request creation (ship)
+  tracker/             # Jira write-back (comments / transitions)
+  tui/                 # Bubble Tea v2: wizard, dashboard, queue monitor + review
 ```
 
 ## Development
@@ -196,9 +210,11 @@ make run      # run from source
 
 ## Roadmap
 
-GitHub/Linear/Azure/GitLab issue sources · concurrent agents · MCP integration ·
-AI sprint summaries · time-per-issue & productivity dashboard · session history ·
-prompt templates · per-issue worktrees · automatic PR creation.
+GitHub/Linear/Azure/GitLab issue sources · MCP integration · AI sprint summaries ·
+time-per-issue & productivity dashboard · session history · prompt templates.
+
+Recently shipped: concurrent autonomous agents · per-issue git worktrees ·
+automatic PR creation · a responsive master-detail dashboard.
 
 ## License
 

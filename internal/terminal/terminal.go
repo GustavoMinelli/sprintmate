@@ -17,6 +17,11 @@ type Spec struct {
 	Args []string
 	Dir  string
 	Env  []string // extra KEY=VALUE entries appended to the inherited environment
+	// StdinFile, when set, is a file whose contents are fed to the process on
+	// stdin. The autonomous queue uses this to deliver the issue context to
+	// headless agents (claude -p / codex exec -) as the prompt, and to give them
+	// a closing EOF (codex exec hangs on a non-TTY pipe without one).
+	StdinFile string
 }
 
 // Strategies (mirrors config values).

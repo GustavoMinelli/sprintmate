@@ -106,3 +106,57 @@ func TestBuildEmptyIssueDoesNotPanic(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 }
+
+func TestBuildPlanFirstInstructions(t *testing.T) {
+	dir := t.TempDir()
+	issue := jira.Issue{Key: "DEMO-1", Title: "T", Description: "desc"}
+
+	out := NewBuilder().Render(context.Background(), issue, dir)
+	if !strings.Contains(out, "## How to approach this") {
+		t.Errorf("default build should include the planning preamble\n---\n%s", out)
+	}
+	// The planning block (trusted) must come before the untrusted description fence.
+	i, j := strings.Index(out, "## How to approach this"), strings.Index(out, untrustedOpen)
+	if i < 0 || j < 0 || i > j {
+		t.Errorf("planning preamble must precede untrusted content (i=%d j=%d)\n---\n%s", i, j, out)
+	}
+
+	b := NewBuilder()
+	b.PlanFirst = false
+	if off := b.Render(context.Background(), issue, dir); strings.Contains(off, "## How to approach this") {
+		t.Errorf("PlanFirst=false should omit the planning preamble\n---\n%s", off)
+	}
+}
+
+func TestBuildIntentInstructions(t *testing.T) {
+	dir := t.TempDir()
+	issue := jira.Issue{Key: "DEMO-1", Title: "T"}
+
+	cases := []struct {
+		intent Intent
+		want   string
+	}{
+		{HeadlessPlan, "produce a plan only"},
+		{HeadlessExecute, "implement the approved plan"},
+	}
+	for _, c := range cases {
+		b := NewBuilder()
+		b.Intent = c.intent
+		if out := b.Render(context.Background(), issue, dir); !strings.Contains(out, c.want) {
+			t.Errorf("intent %d: missing %q\n---\n%s", c.intent, c.want, out)
+		}
+	}
+}
+
+func TestBuildPreambleOverride(t *testing.T) {
+	dir := t.TempDir()
+	b := NewBuilder()
+	b.Preamble = "## Custom\nDo the thing my way."
+	out := b.Render(context.Background(), jira.Issue{Key: "DEMO-1"}, dir)
+	if !strings.Contains(out, "Do the thing my way.") {
+		t.Errorf("custom preamble should win\n---\n%s", out)
+	}
+	if strings.Contains(out, "## How to approach this") {
+		t.Errorf("custom preamble should replace the default block\n---\n%s", out)
+	}
+}

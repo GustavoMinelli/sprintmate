@@ -11,6 +11,7 @@ type Issue struct {
 	Status             string
 	Column             string // board column the status maps to (board mode)
 	Priority           string
+	Assignee           string // display name of the current assignee ("" = unassigned)
 	StoryPoints        float64
 	Sprint             string
 	Labels             []string

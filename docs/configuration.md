@@ -63,7 +63,7 @@ agent:
 agents:                # per-agent launch overrides
   claude:
     command: claude
-    args: ["{context_file}"]
+    args: ["--permission-mode", "plan", "{context_file}"]
   codex:
     command: codex
     args: []
@@ -71,6 +71,33 @@ agents:                # per-agent launch overrides
 
 Placeholders available in `args`: `{context_file}`, `{key}`, `{branch}`, `{dir}`.
 Args that expand to empty are dropped.
+
+The default Claude args include `--permission-mode plan`, which boots Claude Code
+straight into **plan mode** — it investigates and presents an implementation plan
+before touching any code, and waits for you to approve it. Drop the flag if you
+prefer it to start editing immediately. This pairs with the `context.plan_first`
+preamble below (which works for any agent, including ones without a native plan
+mode).
+
+## `context`
+
+Tunes the generated `.issue-context.md` handed to the agent.
+
+```yaml
+context:
+  plan_first: true     # default; prepend "investigate and plan before editing" instructions
+  # preamble: ""       # custom instructions block; overrides the plan_first text
+```
+
+| Field        | Type   | Description |
+|--------------|--------|-------------|
+| `plan_first` | bool   | When true (default), prepends a short trusted instructions block telling the agent to investigate the project and present a step-by-step plan **before** modifying code. Set to false to hand over the raw context with no preamble. |
+| `preamble`   | string | Replaces the generated instructions block with your own text (e.g. a house prompt template). When set, `plan_first` is ignored. |
+
+These instructions are SprintMate's own (trusted) — kept separate from, and
+emitted above, the issue description/comments, which are always fenced as
+**untrusted input** so the agent treats external ticket text as data, not
+instructions.
 
 ## `launch`
 
@@ -99,9 +126,22 @@ no tmux or windowing).
 git:
   create_branch: true
   branch_pattern: "{key}-{slug}"   # e.g. demo-123-corrigir-login-social
+  use_worktrees: false             # isolate each issue in its own git worktree
+  # worktree_base: ~/code/.worktrees
 ```
 
 If the branch already exists it is reused (checked out) instead of recreated.
+
+| Field           | Type   | Description |
+|-----------------|--------|-------------|
+| `create_branch` | bool   | Create/reuse a `{key}-{slug}` branch before launching. |
+| `branch_pattern`| string | Branch name pattern; placeholders `{key}` and `{slug}`. |
+| `use_worktrees` | bool   | When true, each issue's agent runs in its **own git worktree** (an isolated directory) instead of switching the main checkout's branch — so several agents can work in parallel without overwriting each other's files. The main checkout stays on its current branch. Off by default. |
+| `worktree_base` | string | Directory under which per-issue worktrees are created. Empty means a sibling `.sprintmate-worktrees/<workdir-name>` folder (kept outside the main checkout). |
+
+With `use_worktrees`, the agent (and its generated `.issue-context.md`) live in
+`<worktree_base>/<issue-key>`. Add that base — or `.sprintmate-worktrees/` — to
+your global gitignore if it sits near your repos.
 
 ## `keys`
 

@@ -11,7 +11,7 @@ import (
 
 // standardFields are always requested from the search endpoints.
 var standardFields = []string{
-	"summary", "status", "priority", "labels", "project", "description", "comment",
+	"summary", "status", "priority", "assignee", "labels", "project", "description", "comment",
 }
 
 // maxComments caps how many (most recent) comments we keep per issue.
@@ -77,6 +77,27 @@ func (c *Client) FetchIssues(ctx context.Context, src Source) (Result, error) {
 		sprintLabel = "All sprints"
 	}
 	return Result{Issues: parser.all(raws), SprintLabel: sprintLabel, BoardName: board.Name}, nil
+}
+
+// GetIssue fetches and normalizes a single issue by key — the entry point for
+// the `sprintmate <KEY>` quick-launch path. Custom fields are auto-discovered;
+// there's no board column mapping, so Column falls back to the status name.
+func (c *Client) GetIssue(ctx context.Context, key string) (Issue, error) {
+	sprintFieldID, storyPointsID := c.resolveFieldIDs(ctx, Source{})
+	fields := append(append([]string{}, standardFields...), nonEmpty(sprintFieldID, storyPointsID)...)
+	q := url.Values{}
+	q.Set("fields", strings.Join(fields, ","))
+	var r rawIssue
+	if err := c.do(ctx, http.MethodGet, "/rest/api/3/issue/"+url.PathEscape(key), q, nil, &r); err != nil {
+		return Issue{}, err
+	}
+	parser := issueParser{
+		client:        c,
+		sprintFieldID: sprintFieldID,
+		storyPoints:   storyPointsID,
+		columnByStat:  map[string]string{},
+	}
+	return parser.one(r), nil
 }
 
 // resolveSprint determines the sprint to query. It returns the sprint id, a
@@ -254,6 +275,14 @@ func (p issueParser) one(r rawIssue) Issue {
 	}
 	decode(f["priority"], &priority)
 	iss.Priority = priority.Name
+
+	// assignee.displayName survives the GDPR user-privacy migration (only
+	// username/userKey were removed); it's null/absent for unassigned issues.
+	var assignee struct {
+		DisplayName string `json:"displayName"`
+	}
+	decode(f["assignee"], &assignee)
+	iss.Assignee = assignee.DisplayName
 
 	var project struct {
 		Key  string `json:"key"`

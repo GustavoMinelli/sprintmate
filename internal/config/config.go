@@ -27,6 +27,10 @@ type Config struct {
 	Agents  map[string]Agent `yaml:"agents"`
 	Launch  Launch           `yaml:"launch"`
 	Git     Git              `yaml:"git"`
+	Context Context          `yaml:"context"`
+	Ship    Ship             `yaml:"ship"`
+	Queue   Queue            `yaml:"queue"`
+	Notify  Notify           `yaml:"notify"`
 	Keys    Keys             `yaml:"keys"`
 	Workdir string           `yaml:"workdir"`
 
@@ -67,13 +71,34 @@ type Jira struct {
 	OnLaunch OnLaunch `yaml:"on_launch"`
 }
 
-// OnLaunch controls best-effort write-backs to Jira when an issue is launched.
-// Posting to a shared board is an outward-facing action, so it stays opt-in
-// (disabled by default).
+// OnLaunch controls best-effort write-backs to the tracker when an issue is
+// launched. Posting to a shared board is an outward-facing action, so it stays
+// opt-in (disabled by default).
 type OnLaunch struct {
 	// Comment posts a short "started via SprintMate" note on the issue so the
 	// team can see work has begun.
 	Comment bool `yaml:"comment"`
+	// Transition, when set, moves the issue to this workflow status on launch
+	// (matched by transition name or destination status, e.g. "In Progress").
+	// Empty means no transition.
+	Transition string `yaml:"transition,omitempty"`
+}
+
+// Ship controls the best-effort actions performed when an issue's work is
+// approved and shipped from the review screen. Every field is opt-in / empty by
+// default. These are tracker-agnostic (PR creation goes through internal/forge,
+// status/comment through internal/tracker).
+type Ship struct {
+	PushBranch bool   `yaml:"push_branch"`          // git push -u origin <branch>
+	CreatePR   bool   `yaml:"create_pr"`            // open a PR via the detected forge (gh)
+	Base       string `yaml:"base,omitempty"`       // PR base branch; empty = repo default
+	Comment    bool   `yaml:"comment"`              // post the PR link as an issue comment
+	Transition string `yaml:"transition,omitempty"` // move the issue to this status after shipping
+}
+
+// Enabled reports whether any ship action is configured.
+func (s Ship) Enabled() bool {
+	return s.PushBranch || s.CreatePR || s.Comment || strings.TrimSpace(s.Transition) != ""
 }
 
 // Fields lets the user override auto-discovered custom field IDs.
@@ -103,9 +128,60 @@ type Launch struct {
 type Git struct {
 	CreateBranch  bool   `yaml:"create_branch"`
 	BranchPattern string `yaml:"branch_pattern"`
+	// UseWorktrees runs each issue's agent in its own git worktree (an isolated
+	// directory) instead of switching the main checkout's branch, so several
+	// agents can work in parallel without touching the same files. Off by default.
+	UseWorktrees bool `yaml:"use_worktrees"`
+	// WorktreeBase is the directory under which per-issue worktrees are created.
+	// Empty means a sibling ".sprintmate-worktrees/<workdir-name>" folder.
+	WorktreeBase string `yaml:"worktree_base,omitempty"`
 }
 
-// Keys holds the configurable keybindings for the dashboard.
+// WorktreeBasePath returns the base directory under which per-issue worktrees
+// are created for the given main working directory, applying the default when
+// git.worktree_base is unset.
+func (c *Config) WorktreeBasePath(workdir string) string {
+	if b := strings.TrimSpace(c.Git.WorktreeBase); b != "" {
+		return ExpandPath(b)
+	}
+	return filepath.Join(filepath.Dir(workdir), ".sprintmate-worktrees", filepath.Base(workdir))
+}
+
+// Context tunes the generated .issue-context.md.
+type Context struct {
+	// PlanFirst, when true (the default), prepends instructions telling the
+	// agent to investigate and present an implementation plan before editing
+	// code. A nil pointer means "unset" and is treated as true; set it to false
+	// to hand the agent the raw context with no planning preamble.
+	PlanFirst *bool `yaml:"plan_first,omitempty"`
+	// Preamble overrides the generated instructions block with a custom one.
+	Preamble string `yaml:"preamble,omitempty"`
+}
+
+// PlanFirstEnabled reports whether the planning preamble should be emitted. It
+// defaults to true when unset.
+func (c *Config) PlanFirstEnabled() bool {
+	return c.Context.PlanFirst == nil || *c.Context.PlanFirst
+}
+
+// Queue configures the autonomous (headless) run queue.
+type Queue struct {
+	// Concurrency is how many agent jobs run at once (default 2).
+	Concurrency int `yaml:"concurrency"`
+	// AutoApprove runs the execute phase as soon as a plan is ready, skipping the
+	// review gate. Off by default — autonomous edits stay behind explicit approval.
+	AutoApprove bool `yaml:"auto_approve"`
+}
+
+// Notify configures completion notifications for autonomous runs.
+type Notify struct {
+	Bell       bool   `yaml:"bell"`                  // ring the terminal bell
+	OS         bool   `yaml:"os"`                    // desktop notification
+	WebhookURL string `yaml:"webhook_url,omitempty"` // POST {title, body} JSON
+}
+
+// Keys holds the configurable keybindings for the dashboard, queue monitor and
+// review screens.
 type Keys struct {
 	Up          []string `yaml:"up"`
 	Down        []string `yaml:"down"`
@@ -116,6 +192,14 @@ type Keys struct {
 	Search      []string `yaml:"search"`
 	Settings    []string `yaml:"settings"`
 	Quit        []string `yaml:"quit"`
+
+	// Autonomous queue / review bindings.
+	Enqueue []string `yaml:"enqueue"` // dashboard: queue a headless run
+	Monitor []string `yaml:"monitor"` // dashboard: open the queue monitor
+	Approve []string `yaml:"approve"` // monitor/review: approve the plan gate
+	Ship    []string `yaml:"ship"`    // review: ship (push/PR/write-back)
+	Tab     []string `yaml:"tab"`     // review: switch Plan/Diff tab
+	Back    []string `yaml:"back"`    // monitor/review: go back
 }
 
 // Sprint selection modes.
@@ -161,14 +245,24 @@ func Default() *Config {
 		},
 		Agent: AgentDefaults{Default: "claude"},
 		Agents: map[string]Agent{
-			"claude": {Command: "claude", Args: []string{"{context_file}"}},
+			// `--permission-mode plan` boots Claude Code straight into plan mode:
+			// it investigates and presents a plan, editing nothing until the user
+			// approves. Reinforces the planning preamble in the context file.
+			"claude": {Command: "claude", Args: []string{"--permission-mode", "plan", "{context_file}"}},
 			"codex":  {Command: "codex", Args: []string{}},
 		},
-		Launch: Launch{Strategy: StrategyAuto},
-		Git:    Git{CreateBranch: true, BranchPattern: "{key}-{slug}"},
-		Keys:   DefaultKeys(),
+		Launch:  Launch{Strategy: StrategyAuto},
+		Git:     Git{CreateBranch: true, BranchPattern: "{key}-{slug}"},
+		Context: Context{PlanFirst: ptr(true)},
+		Queue:   Queue{Concurrency: 2},
+		Notify:  Notify{Bell: true},
+		Keys:    DefaultKeys(),
 	}
 }
+
+// ptr returns a pointer to v. Handy for optional config fields whose zero value
+// is meaningful (e.g. a bool that defaults to true).
+func ptr[T any](v T) *T { return &v }
 
 // DefaultKeys returns the default keybindings.
 func DefaultKeys() Keys {
@@ -182,6 +276,12 @@ func DefaultKeys() Keys {
 		Search:      []string{"/"},
 		Settings:    []string{"s"},
 		Quit:        []string{"q", "ctrl+c"},
+		Enqueue:     []string{"e"},
+		Monitor:     []string{"m"},
+		Approve:     []string{"a"},
+		Ship:        []string{"S"},
+		Tab:         []string{"tab"},
+		Back:        []string{"esc"},
 	}
 }
 
@@ -297,6 +397,9 @@ func (c *Config) applyDefaults() {
 	if c.Git.BranchPattern == "" {
 		c.Git.BranchPattern = d.Git.BranchPattern
 	}
+	if c.Queue.Concurrency <= 0 {
+		c.Queue.Concurrency = d.Queue.Concurrency
+	}
 	c.Keys = mergeKeys(c.Keys, d.Keys)
 }
 
@@ -318,6 +421,12 @@ func mergeKeys(k, d Keys) Keys {
 		Search:      pick(k.Search, d.Search),
 		Settings:    pick(k.Settings, d.Settings),
 		Quit:        pick(k.Quit, d.Quit),
+		Enqueue:     pick(k.Enqueue, d.Enqueue),
+		Monitor:     pick(k.Monitor, d.Monitor),
+		Approve:     pick(k.Approve, d.Approve),
+		Ship:        pick(k.Ship, d.Ship),
+		Tab:         pick(k.Tab, d.Tab),
+		Back:        pick(k.Back, d.Back),
 	}
 }
 

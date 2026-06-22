@@ -9,7 +9,17 @@ import "github.com/GustavoMinelli/sprintmate/internal/agents"
 
 func init() {
 	agents.Register("claude", func() agents.Agent {
-		// `claude "<file>"` starts a session with the context as the opening prompt.
-		return agents.NewBuiltin("claude", "claude", []string{"{context_file}"})
+		return agents.NewBuiltinHeadless("claude", "claude",
+			// interactive: open a session with the context file as the opening
+			// prompt, booting into plan mode so the agent plans before editing.
+			[]string{"--permission-mode", "plan", "{context_file}"},
+			// headless plan: print mode reading the prompt from stdin (the context
+			// is piped in). Plan mode is read-only; SprintMate captures stdout as
+			// the plan to review.
+			[]string{"-p", "--permission-mode", "plan"},
+			// headless execute: print mode auto-accepting edits inside the worktree
+			// so the approved plan can be implemented unattended.
+			[]string{"-p", "--permission-mode", "acceptEdits"},
+		)
 	})
 }

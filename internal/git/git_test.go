@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -89,6 +90,69 @@ func TestBranchOpsInTempRepo(t *testing.T) {
 	commits, err := RecentCommits(ctx, dir, 5)
 	if err != nil || len(commits) != 1 {
 		t.Fatalf("recent commits: %v err=%v", commits, err)
+	}
+}
+
+func TestWorktreeLifecycleInTempRepo(t *testing.T) {
+	if !Available() {
+		t.Skip("git not available")
+	}
+	ctx := context.Background()
+	repo := t.TempDir()
+	mustGit(t, repo, "init")
+	mustGit(t, repo, "config", "user.email", "t@t.com")
+	mustGit(t, repo, "config", "user.name", "Test")
+	mustGit(t, repo, "commit", "--allow-empty", "-m", "init")
+
+	wt := filepath.Join(t.TempDir(), "base", "demo-1")
+
+	// First add creates the branch (-b path) and the worktree directory.
+	if err := WorktreeAdd(ctx, repo, wt, "demo-1-feature"); err != nil {
+		t.Fatalf("WorktreeAdd (create): %v", err)
+	}
+	if !IsRepo(ctx, wt) {
+		t.Fatal("worktree dir is not a repo")
+	}
+	if b, _ := CurrentBranch(ctx, wt); b != "demo-1-feature" {
+		t.Errorf("worktree branch = %q, want demo-1-feature", b)
+	}
+
+	// Second add at the same dir is an idempotent reuse (no error).
+	if err := WorktreeAdd(ctx, repo, wt, "demo-1-feature"); err != nil {
+		t.Fatalf("WorktreeAdd (reuse): %v", err)
+	}
+
+	list, err := WorktreeList(ctx, repo)
+	if err != nil {
+		t.Fatalf("WorktreeList: %v", err)
+	}
+	// git reports real paths; resolve the temp dir's /var → /private/var symlink.
+	want := wt
+	if r, err := filepath.EvalSymlinks(wt); err == nil {
+		want = r
+	}
+	var found *Worktree
+	for i := range list {
+		if filepath.Clean(list[i].Path) == filepath.Clean(want) {
+			found = &list[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("worktree %q not listed: %+v", wt, list)
+	}
+	if found.Branch != "demo-1-feature" {
+		t.Errorf("listed branch = %q", found.Branch)
+	}
+
+	// Remove, then re-add: the branch now exists, exercising the checkout path.
+	if err := WorktreeRemove(ctx, repo, wt, true); err != nil {
+		t.Fatalf("WorktreeRemove: %v", err)
+	}
+	if err := WorktreeAdd(ctx, repo, wt, "demo-1-feature"); err != nil {
+		t.Fatalf("WorktreeAdd (existing branch): %v", err)
+	}
+	if b, _ := CurrentBranch(ctx, wt); b != "demo-1-feature" {
+		t.Errorf("re-added worktree branch = %q", b)
 	}
 }
 

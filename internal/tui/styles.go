@@ -11,6 +11,13 @@ var (
 	colorErr     = lipgloss.Color("#F87171")
 	colorOK      = lipgloss.Color("#6EE7B7")
 	colorInk     = lipgloss.Color("#111827") // dark text for light badges
+
+	// colorActive is the single signature accent. It marks ONLY "what's selected
+	// / running / in progress" — the selected list row, in-flight job badges, the
+	// live text cursor, the queue strip when something is running. Amber sits
+	// between the semantic red (failed) and green (done) like a traffic light:
+	// amber = in progress. Everything else stays grayscale so the accent reads.
+	colorActive = lipgloss.Color("#F59E0B")
 )
 
 // Mascot ("SprintMate" robozinho) pixel-art palette — grayscale shell with a
@@ -46,13 +53,17 @@ var (
 	footerLabelStyle = lipgloss.NewStyle().Foreground(colorAccent)
 	footerValueStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
 
-	helpStyle = lipgloss.NewStyle().Foreground(colorAccent)
+	helpStyle   = lipgloss.NewStyle().Foreground(colorAccent)
 	errStyle    = lipgloss.NewStyle().Foreground(colorErr).Bold(true)
 	okStyle     = lipgloss.NewStyle().Foreground(colorOK)
 	updateStyle = lipgloss.NewStyle().Foreground(colorOK).Bold(true)
-	cursorStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+	cursorStyle = lipgloss.NewStyle().Foreground(colorActive).Bold(true)
 	selStyle    = lipgloss.NewStyle().Foreground(colorAccent)
 	dimStyle    = lipgloss.NewStyle().Foreground(colorMuted)
+
+	// activeStyle paints the signature accent on live state (running counts,
+	// in-progress status). Use it sparingly — see colorActive.
+	activeStyle = lipgloss.NewStyle().Foreground(colorActive).Bold(true)
 
 	boxStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).

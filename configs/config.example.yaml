@@ -27,6 +27,7 @@ jira:
   # --- write-back to Jira on launch (opt-in; off by default) ---
   on_launch:
     comment: false             # post a "started via SprintMate" note on the issue
+    transition: ""             # move the issue to this status on launch, e.g. "In Progress"
 
 agent:
   default: claude
@@ -34,7 +35,9 @@ agent:
 agents:                        # each agent's command is configurable
   claude:
     command: claude
-    args: ["{context_file}"]   # placeholders: {context_file} {key} {branch} {dir}
+    # --permission-mode plan boots Claude Code into plan mode: it presents a
+    # plan before editing. placeholders: {context_file} {key} {branch} {dir}
+    args: ["--permission-mode", "plan", "{context_file}"]
   codex:
     command: codex
     args: []
@@ -47,6 +50,28 @@ launch:
 git:
   create_branch: true
   branch_pattern: "{key}-{slug}"   # e.g. demo-123-fix-social-login
+  use_worktrees: false             # run each issue in its own git worktree (parallel-safe)
+  # worktree_base: ""              # where worktrees live; empty = sibling .sprintmate-worktrees/
+
+context:                       # tunes the generated .issue-context.md
+  plan_first: true             # prepend "investigate and plan before editing" instructions
+  # preamble: ""               # custom instructions block (overrides plan_first text)
+
+ship:                          # actions when you approve & ship from the review screen (opt-in)
+  push_branch: false           # git push -u origin <branch>
+  create_pr: false             # open a PR via the GitHub CLI (gh)
+  base: ""                     # PR base branch; empty = repo default
+  comment: false               # post the PR link back on the issue
+  transition: ""               # move the issue to this status after shipping, e.g. "In Review"
+
+queue:                         # autonomous (headless) run queue
+  concurrency: 2               # how many agent jobs run at once
+  auto_approve: false          # run the execute phase without the review gate (off = review each plan)
+
+notify:                        # completion notifications for autonomous runs
+  bell: true                   # ring the terminal bell
+  os: false                    # desktop notification (osascript / notify-send)
+  # webhook_url: ""            # POST {title, body} JSON on completion
 
 keys:                          # configurable keybindings
   up: ["up", "k"]
@@ -58,6 +83,12 @@ keys:                          # configurable keybindings
   search: ["/"]
   settings: ["s"]
   quit: ["q", "ctrl+c"]
+  enqueue: ["e"]               # dashboard: queue a headless run
+  monitor: ["m"]               # dashboard: open the queue monitor
+  approve: ["a"]               # monitor/review: approve the plan gate
+  ship: ["S"]                  # review: ship (push / PR / write-back)
+  tab: ["tab"]                 # review: switch Plan/Diff tab
+  back: ["esc"]                # monitor/review: go back
 
 # working directory: where the agents are opened (every issue runs here)
 workdir: ~/Documents/projects

@@ -31,11 +31,26 @@ type Config struct {
 	Args    []string
 }
 
+// Mode selects a non-interactive invocation of an agent for the autonomous
+// queue: a plan-only pass (output a plan, edit nothing) or an execution pass
+// (implement the approved plan).
+type Mode int
+
+const (
+	HeadlessPlan Mode = iota
+	HeadlessExecute
+)
+
 // Agent is the small interface every supported agent implements.
 type Agent interface {
 	Name() string
 	IsInstalled() bool
+	// Spec builds the interactive launch command.
 	Spec(p Params, cfg Config) terminal.Spec
+	// HeadlessSpec builds the non-interactive command for the given mode. The
+	// second return is false when the agent has no headless support, so the
+	// autonomous queue can skip it gracefully.
+	HeadlessSpec(p Params, cfg Config, mode Mode) (terminal.Spec, bool)
 }
 
 // --- registry -------------------------------------------------------------
@@ -81,12 +96,27 @@ type builtin struct {
 	name           string
 	defaultCommand string
 	defaultArgs    []string
+	// headlessArgs holds the per-mode argument lists for non-interactive runs.
+	// A missing/empty entry means the agent has no headless support for that mode.
+	headlessArgs map[Mode][]string
 }
 
-// NewBuiltin constructs a command-based agent. Subpackages use this in their
-// Register call.
+// NewBuiltin constructs an interactive-only command-based agent. Subpackages use
+// this in their Register call. The autonomous queue will skip such agents.
 func NewBuiltin(name, defaultCommand string, defaultArgs []string) Agent {
 	return builtin{name: name, defaultCommand: defaultCommand, defaultArgs: defaultArgs}
+}
+
+// NewBuiltinHeadless constructs a command-based agent that also supports the
+// autonomous queue: planArgs run a plan-only pass and execArgs run the
+// implementation pass (both placeholder-expanded like interactiveArgs).
+func NewBuiltinHeadless(name, defaultCommand string, interactiveArgs, planArgs, execArgs []string) Agent {
+	return builtin{
+		name:           name,
+		defaultCommand: defaultCommand,
+		defaultArgs:    interactiveArgs,
+		headlessArgs:   map[Mode][]string{HeadlessPlan: planArgs, HeadlessExecute: execArgs},
+	}
 }
 
 func (b builtin) Name() string { return b.name }
@@ -96,20 +126,39 @@ func (b builtin) IsInstalled() bool {
 	return err == nil
 }
 
-func (b builtin) Spec(p Params, cfg Config) terminal.Spec {
-	command := cfg.Command
-	if strings.TrimSpace(command) == "" {
-		command = b.defaultCommand
+func (b builtin) command(cfg Config) string {
+	if c := strings.TrimSpace(cfg.Command); c != "" {
+		return c
 	}
+	return b.defaultCommand
+}
+
+func (b builtin) Spec(p Params, cfg Config) terminal.Spec {
 	rawArgs := cfg.Args
 	if rawArgs == nil {
 		rawArgs = b.defaultArgs
 	}
 	return terminal.Spec{
-		Bin:  command,
+		Bin:  b.command(cfg),
 		Args: ExpandArgs(rawArgs, p),
 		Dir:  p.Dir,
 	}
+}
+
+func (b builtin) HeadlessSpec(p Params, cfg Config, mode Mode) (terminal.Spec, bool) {
+	args, ok := b.headlessArgs[mode]
+	if !ok || len(args) == 0 {
+		return terminal.Spec{}, false
+	}
+	// The context is delivered to the agent on stdin (not as a path argument):
+	// `claude -p` / `codex exec -` read the prompt from the pipe, and the pipe's
+	// EOF prevents codex from hanging on a non-TTY stdin.
+	return terminal.Spec{
+		Bin:       b.command(cfg),
+		Args:      ExpandArgs(args, p),
+		Dir:       p.Dir,
+		StdinFile: p.ContextPath,
+	}, true
 }
 
 // ExpandArgs substitutes placeholders in each arg and drops args that expand to

@@ -60,6 +60,32 @@ func TestExpandArgsDropsEmpty(t *testing.T) {
 	}
 }
 
+func TestHeadlessSpec(t *testing.T) {
+	a := NewBuiltinHeadless("x", "x", []string{"{context_file}"}, []string{"-p"}, []string{"-p", "--write"})
+	p := Params{ContextPath: "/p/ctx.md", Dir: "/p"}
+
+	plan, ok := a.HeadlessSpec(p, Config{}, HeadlessPlan)
+	if !ok || plan.Bin != "x" || plan.Dir != "/p" {
+		t.Fatalf("plan headless spec = %+v ok=%v", plan, ok)
+	}
+	// The context is delivered on stdin, not as a path argument.
+	if plan.StdinFile != "/p/ctx.md" {
+		t.Errorf("StdinFile = %q, want /p/ctx.md", plan.StdinFile)
+	}
+	if len(plan.Args) != 1 || plan.Args[0] != "-p" {
+		t.Errorf("plan args = %v", plan.Args)
+	}
+	exec, ok := a.HeadlessSpec(p, Config{}, HeadlessExecute)
+	if !ok || len(exec.Args) != 2 || exec.Args[1] != "--write" {
+		t.Errorf("exec headless spec = %+v ok=%v", exec, ok)
+	}
+
+	// An interactive-only agent reports no headless support.
+	if _, ok := NewBuiltin("y", "y", nil).HeadlessSpec(p, Config{}, HeadlessPlan); ok {
+		t.Error("NewBuiltin should not support headless")
+	}
+}
+
 func TestSpecConfigOverride(t *testing.T) {
 	a := NewBuiltin("claude", "claude", []string{"{context_file}"})
 	p := Params{ContextPath: "/p/ctx.md", Dir: "/p"}

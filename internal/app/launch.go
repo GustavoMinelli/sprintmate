@@ -18,6 +18,7 @@ import (
 	"github.com/GustavoMinelli/sprintmate/internal/git"
 	"github.com/GustavoMinelli/sprintmate/internal/jira"
 	"github.com/GustavoMinelli/sprintmate/internal/terminal"
+	"github.com/GustavoMinelli/sprintmate/internal/tracker"
 )
 
 // Plan is the resolved set of actions for launching an issue, computed before
@@ -64,32 +65,55 @@ func PrepareAndLaunch(ctx context.Context, cfg *config.Config, plan Plan) error 
 	prepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// Git branch (best-effort: only when enabled and inside a repo). Only
-	// expose {branch} to the agent when a branch was actually created/reused.
+	// Git branch/worktree (best-effort: only when enabled and inside a repo).
+	// Only expose {branch} to the agent when a branch was actually prepared.
+	// The agent runs in agentDir, which is the worktree when worktrees are on.
 	branchForAgent := ""
-	if cfg.Git.CreateBranch && git.Available() && git.IsRepo(prepCtx, plan.Dir) {
+	agentDir := plan.Dir
+	inRepo := git.Available() && git.IsRepo(prepCtx, plan.Dir)
+	switch {
+	case cfg.Git.UseWorktrees && inRepo:
+		// Each issue gets an isolated worktree so parallel agents never touch the
+		// same files; the main checkout is left on its current branch.
+		base := cfg.WorktreeBasePath(plan.Dir)
+		wt := git.WorktreePath(base, plan.Issue.Key)
+		if err := git.WorktreeAdd(prepCtx, plan.Dir, wt, plan.Branch); err != nil {
+			return fmt.Errorf("preparing worktree: %w", err)
+		}
+		agentDir = wt
+		branchForAgent = plan.Branch
+	case cfg.Git.CreateBranch && inRepo:
 		if _, err := git.CreateOrReuseBranch(prepCtx, plan.Dir, plan.Branch); err != nil {
 			return fmt.Errorf("preparing branch: %w", err)
 		}
 		branchForAgent = plan.Branch
 	}
 
-	// Best-effort Jira interactions; failures here never block the launch.
+	// Best-effort tracker interactions; failures here never block the launch.
 	if cfg.Jira.Host != "" && plan.Issue.Key != "" {
+		// Refresh the genuinely most-recent comments for the context (a read; do
+		// this before posting our own note so it isn't fed back into the context).
 		client := jira.New(cfg.Jira.Host, cfg.Jira.Email, cfg.Jira.Token)
-		// Refresh the genuinely most-recent comments for the context (do this
-		// before posting our own note so it isn't fed back into the context).
 		if cs, err := client.RecentComments(prepCtx, plan.Issue.Key, 5); err == nil && len(cs) > 0 {
 			plan.Issue.Comments = cs
 		}
-		// Optionally post a launch note so the team can see work has started.
+		// Outward write-backs go through the source-agnostic tracker (opt-in).
+		w := tracker.NewJira(cfg.Jira.Host, cfg.Jira.Email, cfg.Jira.Token)
 		if cfg.Jira.OnLaunch.Comment {
-			_ = client.AddComment(prepCtx, plan.Issue.Key, launchComment(plan.AgentName, branchForAgent))
+			_ = w.Comment(prepCtx, plan.Issue.Key, launchComment(plan.AgentName, branchForAgent))
+		}
+		if cfg.Jira.OnLaunch.Transition != "" {
+			_ = w.TransitionTo(prepCtx, plan.Issue.Key, cfg.Jira.OnLaunch.Transition)
 		}
 	}
 
-	// Issue context file.
-	ctxPath, err := issuecontext.NewBuilder().Build(prepCtx, plan.Issue, plan.Dir)
+	// Issue context file, written into the directory the agent will run in (the
+	// worktree when enabled). The planning preamble (telling the agent to plan
+	// before editing) is on by default and configurable under config.context.
+	builder := issuecontext.NewBuilder()
+	builder.PlanFirst = cfg.PlanFirstEnabled()
+	builder.Preamble = cfg.Context.Preamble
+	ctxPath, err := builder.Build(prepCtx, plan.Issue, agentDir)
 	if err != nil {
 		return err
 	}
@@ -99,7 +123,7 @@ func PrepareAndLaunch(ctx context.Context, cfg *config.Config, plan Plan) error 
 		IssueKey:    plan.Issue.Key,
 		ContextPath: ctxPath,
 		Branch:      branchForAgent,
-		Dir:         plan.Dir,
+		Dir:         agentDir,
 	}, cfg.AgentConfig(plan.AgentName))
 
 	strategy := plan.Strategy

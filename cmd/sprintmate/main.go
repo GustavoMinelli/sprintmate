@@ -5,15 +5,23 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
+	"strings"
+	"time"
 
 	"github.com/GustavoMinelli/sprintmate/internal/app"
 	"github.com/GustavoMinelli/sprintmate/internal/config"
+	"github.com/GustavoMinelli/sprintmate/internal/jira"
 	"github.com/GustavoMinelli/sprintmate/internal/tui"
 
 	// Register the built-in agents (extension point: add more here).
 	_ "github.com/GustavoMinelli/sprintmate/internal/agents/claude"
 	_ "github.com/GustavoMinelli/sprintmate/internal/agents/codex"
 )
+
+// issueKeyRe matches a Jira issue key like DEMO-123 (case-insensitive so a
+// lowercased argument still works).
+var issueKeyRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9]+-[0-9]+$`)
 
 // Set via -ldflags at release time.
 var (
@@ -36,6 +44,11 @@ func main() {
 		case "config":
 			startInWizard = true
 		default:
+			// `sprintmate ABC-123` launches one issue directly, skipping the dashboard.
+			if issueKeyRe.MatchString(os.Args[1]) {
+				quickLaunch(strings.ToUpper(os.Args[1]))
+				return
+			}
 			fmt.Fprintf(os.Stderr, "unknown command %q\n\n", os.Args[1])
 			usage()
 			os.Exit(2)
@@ -56,13 +69,34 @@ func main() {
 	if result == nil || !result.Launch {
 		return
 	}
+	launchPlan(newCfg, result.Issue, result.Agent)
+}
 
-	plan, err := app.BuildPlan(newCfg, result.Issue, result.Agent)
+// quickLaunch fetches a single issue by key and launches it directly, bypassing
+// the dashboard. It requires a complete config (Jira credentials + workdir).
+func quickLaunch(key string) {
+	cfg, err := config.Load()
+	if err != nil {
+		fatal(fmt.Errorf("`sprintmate %s` needs a complete config — run `sprintmate config` first (%w)", key, err))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	issue, err := jira.New(cfg.Jira.Host, cfg.Jira.Email, cfg.Jira.Token).GetIssue(ctx, key)
+	if err != nil {
+		fatal(fmt.Errorf("fetching %s: %w", key, err))
+	}
+	launchPlan(cfg, issue, cfg.Agent.Default)
+}
+
+// launchPlan builds and runs the launch plan for an issue+agent, shared by the
+// dashboard result path and quick-launch.
+func launchPlan(cfg *config.Config, issue jira.Issue, agent string) {
+	plan, err := app.BuildPlan(cfg, issue, agent)
 	if err != nil {
 		fatal(err)
 	}
 	fmt.Printf("→ %s · %s · branch %s · %s\n", plan.Issue.Key, plan.AgentName, plan.Branch, plan.Dir)
-	if err := app.PrepareAndLaunch(context.Background(), newCfg, plan); err != nil {
+	if err := app.PrepareAndLaunch(context.Background(), cfg, plan); err != nil {
 		fatal(err)
 	}
 }
@@ -72,6 +106,7 @@ func usage() {
 
 Usage:
   sprintmate            Open the dashboard (or the setup wizard on first run)
+  sprintmate ABC-123    Launch a specific issue directly, skipping the dashboard
   sprintmate config     Open the setup wizard / settings
   sprintmate version    Print version
   sprintmate help       Show this help
