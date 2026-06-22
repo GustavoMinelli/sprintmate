@@ -1,5 +1,5 @@
 # golangci-lint configuration (v2 format).
-# Pinned alongside golangci-lint-action@v7 so the lint set is reproducible
+# Pinned alongside golangci-lint-action@v9 so the lint set is reproducible
 # and not tied to whatever "latest" happens to ship.
 version: "2"
 

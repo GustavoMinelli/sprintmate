@@ -38,7 +38,7 @@ func RunPhase(ctx context.Context, job *Job, phase Phase, spec terminal.Spec) er
 	if err != nil {
 		return fmt.Errorf("opening session log: %w", err)
 	}
-	defer logFile.Close()
+	defer func() { _ = logFile.Close() }()
 
 	cmd := exec.CommandContext(ctx, spec.Bin, spec.Args...)
 	cmd.Dir = spec.Dir
@@ -53,7 +53,7 @@ func RunPhase(ctx context.Context, job *Job, phase Phase, spec terminal.Spec) er
 		if err != nil {
 			return fmt.Errorf("opening context for stdin: %w", err)
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		cmd.Stdin = f
 	}
 

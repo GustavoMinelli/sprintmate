@@ -46,7 +46,11 @@ jobs:
           fi
       # action major v9 targets golangci-lint v2 (>= v2.1.0); the version and
       # .golangci.yml are pinned so the lint set is reproducible (not "latest").
+      # The pinned binary must be built with a Go toolchain whose language
+      # version is >= the go directive in go.mod (currently go 1.26.x) — it
+      # compares M.m only, so the patch level doesn't matter. v2.12.2 ships
+      # built with go1.26, which satisfies the go 1.26.4 target.
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.1.6
+          version: v2.12.2
