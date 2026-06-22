@@ -28,6 +28,7 @@ const (
 	stepBoard
 	stepColumns
 	stepSprint
+	stepComment
 	stepAgent
 	stepWorkdir
 )
@@ -60,6 +61,10 @@ type wizard struct {
 	sprintOpts []string
 	sprintCur  int
 
+	// comment step: opt-in to posting a "started" note to Jira on launch
+	commentOpts []string
+	commentCur  int
+
 	// agent step
 	agentOpts []string
 	agentCur  int
@@ -74,12 +79,12 @@ type wizard struct {
 
 func newWizard(cfg *config.Config, isSettings bool) wizard {
 	host := textinput.New()
-	host.Placeholder = "https://empresa.atlassian.net"
+	host.Placeholder = "https://company.atlassian.net"
 	host.SetValue(cfg.Jira.Host)
 	host.SetWidth(48)
 
 	email := textinput.New()
-	email.Placeholder = "voce@empresa.com"
+	email.Placeholder = "you@company.com"
 	email.SetValue(cfg.Jira.Email)
 	email.SetWidth(48)
 
@@ -88,7 +93,7 @@ func newWizard(cfg *config.Config, isSettings bool) wizard {
 	token.SetWidth(48)
 	if os.Getenv(config.EnvToken) != "" {
 		// Token comes from the environment; don't seed it (and don't persist it).
-		token.Placeholder = "usando $" + config.EnvToken
+		token.Placeholder = "using $" + config.EnvToken
 	} else {
 		token.Placeholder = "API token"
 		token.SetValue(cfg.Jira.Token)
@@ -106,6 +111,11 @@ func newWizard(cfg *config.Config, isSettings bool) wizard {
 		inputs:     []textinput.Model{host, email, token},
 		sprintOpts: []string{config.SprintActive, config.SprintFuture, config.SprintAll},
 		sprintCur:  sprintIndex(cfg.Jira.Sprint),
+		commentOpts: []string{
+			"No — keep my activity private (default)",
+			"Yes — post a “started via SprintMate” note on the issue",
+		},
+		commentCur: boolIndex(cfg.Jira.OnLaunch.Comment),
 		agentOpts:  agents.Names(),
 		agentCur:   max(0, slices.Index(agents.Names(), cfg.Agent.Default)),
 		workdir:    wd,
@@ -182,7 +192,7 @@ func (w wizard) handleKey(msg tea.KeyPressMsg) (wizard, tea.Cmd) {
 			}
 			envToken := os.Getenv(config.EnvToken)
 			if w.host() == "" || w.email() == "" || (w.token() == "" && envToken == "") {
-				w.err = "preencha host, email e token"
+				w.err = "enter host, email and token"
 				return w, nil
 			}
 			tok := w.token()
@@ -231,6 +241,17 @@ func (w wizard) handleKey(msg tea.KeyPressMsg) (wizard, tea.Cmd) {
 		case "down", "j":
 			w.sprintCur = clampInc(w.sprintCur, len(w.sprintOpts))
 		case "enter":
+			w.step = stepComment
+		}
+		return w, nil
+
+	case stepComment:
+		switch k {
+		case "up", "k":
+			w.commentCur = clampDec(w.commentCur)
+		case "down", "j":
+			w.commentCur = clampInc(w.commentCur, len(w.commentOpts))
+		case "enter":
 			w.step = stepAgent
 		}
 		return w, nil
@@ -263,7 +284,7 @@ func (w wizard) handleKey(msg tea.KeyPressMsg) (wizard, tea.Cmd) {
 func (w wizard) confirmWorkdir() (wizard, tea.Cmd) {
 	value := strings.TrimSpace(w.workdir.Value())
 	if value == "" {
-		w.err = "informe a pasta de trabalho"
+		w.err = "enter the working directory"
 		return w, nil
 	}
 	if base, leaf, matches := dirCompletion(value); leaf != "" && len(matches) > 0 {
@@ -274,7 +295,7 @@ func (w wizard) confirmWorkdir() (wizard, tea.Cmd) {
 	}
 	resolved := filepath.Clean(resolveDir(value))
 	if !isDir(resolved) {
-		w.err = "pasta não encontrada: " + resolved
+		w.err = "folder not found: " + resolved
 		return w, nil
 	}
 	w.workdir.SetValue(resolved)
@@ -296,8 +317,10 @@ func (w wizard) back() (wizard, tea.Cmd) {
 		w.step = stepBoard
 	case stepSprint:
 		w.step = stepColumns
-	case stepAgent:
+	case stepComment:
 		w.step = stepSprint
+	case stepAgent:
+		w.step = stepComment
 	case stepWorkdir:
 		w.step = stepAgent
 	}
@@ -319,6 +342,7 @@ func (w wizard) finish() (wizard, tea.Cmd) {
 	}
 	c.Jira.Columns = w.selectedColumns()
 	c.Jira.Sprint = w.sprintOpts[w.sprintCur]
+	c.Jira.OnLaunch.Comment = w.commentCur == 1
 	if c.Jira.Assignee == "" {
 		c.Jira.Assignee = "currentUser"
 	}
@@ -333,7 +357,7 @@ func (w wizard) finish() (wizard, tea.Cmd) {
 		c.Workdir = ""
 	}
 	if err := config.Save(c); err != nil {
-		w.err = "erro ao salvar config: " + err.Error()
+		w.err = "error saving config: " + err.Error()
 		return w, nil
 	}
 	return w, func() tea.Msg { return wizardDoneMsg{cfg: c} }
@@ -372,14 +396,14 @@ func (w wizard) View(mas mascot) string {
 	case w.err != "":
 		mood = moodError
 	}
-	title := mas.header("SprintMate · Configuração", mood)
+	title := mas.header("SprintMate · Setup", mood)
 
 	// Before we know the terminal size (first frame / tests) or on tiny windows,
 	// fall back to the compact, content-sized box.
 	if w.width < 70 || w.height < 18 {
 		body := w.stepView()
 		if w.loading {
-			body = dimStyle.Render("Carregando do Jira...")
+			body = dimStyle.Render("Loading from Jira...")
 		}
 		inner := lipgloss.JoinVertical(lipgloss.Left, title, "", body, "", w.footerView())
 		return boxStyle.Render(inner)
@@ -402,7 +426,7 @@ func (w wizard) View(mas mascot) string {
 	var body string
 	switch {
 	case w.loading:
-		body = dimStyle.Render("Carregando do Jira...")
+		body = dimStyle.Render("Loading from Jira...")
 	case w.step == stepWorkdir:
 		body = w.workdirView(innerW, bodyH)
 	default:
@@ -450,10 +474,10 @@ func (w wizard) workdirFormPanel(contentW int) string {
 	w.workdir.SetWidth(inputW)
 
 	var b strings.Builder
-	b.WriteString(panelTitleStyle.Render("Pasta de trabalho") + "\n\n")
-	b.WriteString(projField("Pasta", w.workdir, true, inputW) + "\n\n")
-	b.WriteString(dimStyle.Render("Onde os agentes vão rodar.") + "\n")
-	b.WriteString(dimStyle.Render("Toda demanda abre nesta pasta.") + "\n")
+	b.WriteString(panelTitleStyle.Render("Working directory") + "\n\n")
+	b.WriteString(projField("Folder", w.workdir, true, inputW) + "\n\n")
+	b.WriteString(dimStyle.Render("Where the agents will run.") + "\n")
+	b.WriteString(dimStyle.Render("Every issue opens in this folder.") + "\n")
 	if v := strings.TrimSpace(w.workdir.Value()); v != "" {
 		if resolved := resolveDir(v); isDir(resolved) {
 			b.WriteString("\n" + okStyle.Render("✓ "+truncate(resolved, max(3, contentW-2))))
@@ -464,7 +488,7 @@ func (w wizard) workdirFormPanel(contentW int) string {
 
 // dirPreviewPanel renders a live preview of the folder being typed.
 func (w wizard) dirPreviewPanel(contentW, contentH int) string {
-	header := panelTitleStyle.Render("Buscar pasta")
+	header := panelTitleStyle.Render("Find folder")
 	preview := renderDirCompletion(w.workdir.Value(), contentW, contentH-2)
 	return header + "\n\n" + preview
 }
@@ -474,10 +498,10 @@ func (w wizard) stepView() string {
 	case stepAPI:
 		status := ""
 		if w.testing {
-			status = dimStyle.Render("testando conexão...")
+			status = dimStyle.Render("testing connection...")
 		}
 		rows := []string{
-			labelStyle.Render("1/6 · Conexão com a API do Jira"),
+			labelStyle.Render("1/7 · Jira API connection"),
 			"",
 			field("Host ", w.inputs[0], w.focus == 0),
 			field("Email", w.inputs[1], w.focus == 1),
@@ -492,43 +516,51 @@ func (w wizard) stepView() string {
 		for i, b := range w.boards {
 			names[i] = b.Name
 		}
-		return label("2/6 · Escolha o board") + "\n\n" + renderChoices(names, w.boardCur, nil)
+		return label("2/7 · Choose board") + "\n\n" + renderChoices(names, w.boardCur, nil)
 
 	case stepColumns:
 		names := make([]string, len(w.columns))
 		for i, c := range w.columns {
 			names[i] = c.Name
 		}
-		return label("3/6 · Colunas a puxar (espaço marca/desmarca)") + "\n\n" + renderChoices(names, w.colCur, w.colCheck)
+		return label("3/7 · Columns to pull (space toggles)") + "\n\n" + renderChoices(names, w.colCur, w.colCheck)
 
 	case stepSprint:
-		return label("4/6 · Sprint") + "\n\n" + renderChoices(w.sprintOpts, w.sprintCur, nil)
+		return label("4/7 · Sprint") + "\n\n" + renderChoices(w.sprintOpts, w.sprintCur, nil)
+
+	case stepComment:
+		help := dimStyle.Render(
+			"When on, SprintMate posts a short “started via SprintMate” note on the\n" +
+				"issue each time you launch it, so the team can see work has begun.\n" +
+				"Leave it off to keep your activity private — nothing is written to Jira.")
+		return label("5/7 · Post a comment to Jira when you launch an issue?") + "\n\n" +
+			renderChoices(w.commentOpts, w.commentCur, nil) + "\n" + help
 
 	case stepAgent:
 		opts := make([]string, len(w.agentOpts))
 		for i, a := range w.agentOpts {
-			mark := dimStyle.Render(" (não instalado)")
+			mark := dimStyle.Render(" (not installed)")
 			if ag, ok := agents.Get(a); ok && ag.IsInstalled() {
-				mark = okStyle.Render(" (instalado)")
+				mark = okStyle.Render(" (installed)")
 			}
 			opts[i] = a + mark
 		}
-		return label("5/6 · Agente padrão") + "\n\n" + renderChoices(opts, w.agentCur, nil)
+		return label("6/7 · Default agent") + "\n\n" + renderChoices(opts, w.agentCur, nil)
 
 	case stepWorkdir:
 		var b strings.Builder
-		b.WriteString(label("6/6 · Pasta de trabalho") + "\n\n")
-		b.WriteString(projField("Pasta", w.workdir, true, 40) + "\n")
+		b.WriteString(label("7/7 · Working directory") + "\n\n")
+		b.WriteString(projField("Folder", w.workdir, true, 40) + "\n")
 		if path := strings.TrimSpace(w.workdir.Value()); path != "" {
 			if _, leaf, matches := dirCompletion(path); leaf != "" && len(matches) > 0 {
 				b.WriteString(dimStyle.Render("  enter → "+truncate(matches[0]+"/", 46)) + "\n")
 			} else if isDir(resolveDir(path)) {
 				b.WriteString(okStyle.Render("  ✓ "+truncate(resolveDir(path), 50)) + "\n")
 			} else {
-				b.WriteString(errStyle.Render("  ✗ pasta não encontrada") + "\n")
+				b.WriteString(errStyle.Render("  ✗ folder not found") + "\n")
 			}
 		}
-		b.WriteString("\n" + dimStyle.Render("Toda demanda abre nesta pasta."))
+		b.WriteString("\n" + dimStyle.Render("Every issue opens in this folder."))
 		return b.String()
 	}
 	return ""
@@ -537,13 +569,13 @@ func (w wizard) stepView() string {
 func (w wizard) footerHelp() string {
 	switch w.step {
 	case stepAPI:
-		return "tab: campo · enter: testar e avançar · esc: " + cancelLabel(w.isSettings)
+		return "tab: field · enter: test and continue · esc: " + cancelLabel(w.isSettings)
 	case stepColumns:
-		return "↑/↓ mover · espaço marcar · enter: avançar · esc: voltar"
+		return "↑/↓ move · space toggle · enter: continue · esc: back"
 	case stepWorkdir:
-		return "digite p/ buscar · enter: entrar na pasta · enter na pasta válida: concluir · esc: voltar"
+		return "type to search · enter: open folder · enter on a valid folder: finish · esc: back"
 	default:
-		return "↑/↓ mover · enter: escolher · esc: voltar"
+		return "↑/↓ move · enter: choose · esc: back"
 	}
 }
 
@@ -565,7 +597,7 @@ func (w wizard) selectedColumns() []string {
 
 func renderChoices(items []string, cursor int, checked map[int]bool) string {
 	if len(items) == 0 {
-		return dimStyle.Render("  (nada encontrado)")
+		return dimStyle.Render("  (nothing found)")
 	}
 	var b strings.Builder
 	for i, it := range items {
@@ -701,15 +733,15 @@ func renderDirCompletion(value string, width, height int) string {
 
 	base, leaf, matches := dirCompletion(value)
 
-	head := dimStyle.Render(truncate("buscando em "+base, width))
+	head := dimStyle.Render(truncate("searching in "+base, width))
 	if resolved := resolveDir(strings.TrimSpace(value)); strings.TrimSpace(value) != "" && isDir(resolved) {
 		head = okStyle.Render(truncate("✓ "+resolved, width))
 	}
 
 	if len(matches) == 0 {
-		hint := "(nenhuma pasta aqui)"
+		hint := "(no folders here)"
 		if leaf != "" {
-			hint = "(nenhuma pasta começa com “" + leaf + "”)"
+			hint = "(no folder starts with “" + leaf + "”)"
 		}
 		return head + "\n\n" + dimStyle.Render(truncate(hint, width))
 	}
@@ -780,9 +812,9 @@ func truncate(s string, max int) string {
 
 func cancelLabel(isSettings bool) string {
 	if isSettings {
-		return "cancelar"
+		return "cancel"
 	}
-	return "sair"
+	return "quit"
 }
 
 // wizardNetTimeout bounds each wizard network step so a slow Jira can't hang
@@ -827,6 +859,13 @@ func sprintIndex(s string) int {
 	}
 }
 
+func boolIndex(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
 func boardIndex(boards []jira.Board, nameOrID string) int {
 	for i, b := range boards {
 		if b.Name == nameOrID || fmt.Sprint(b.ID) == nameOrID {
@@ -849,7 +888,7 @@ func preselectColumns(cols []jira.Column, configured []string) map[int]bool {
 	return m
 }
 
-// friendlyErr maps the common connection failures to a plain Portuguese message
+// friendlyErr maps the common connection failures to a plain, friendly message
 // for the type-and-Enter audience, passing anything else through verbatim.
 func friendlyErr(err error) string {
 	if err == nil {
@@ -859,20 +898,20 @@ func friendlyErr(err error) string {
 		return err.Error() // already a clear, actionable sentence
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "tempo esgotado ao falar com o Jira — verifique o host e sua conexão"
+		return "timed out talking to Jira — check the host and your connection"
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return "tempo esgotado ao falar com o Jira — verifique o host e sua conexão"
+		return "timed out talking to Jira — check the host and your connection"
 	}
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
-		return "não foi possível encontrar o host do Jira — verifique o endereço"
+		return "couldn't resolve the Jira host — check the address"
 	}
 	msg := err.Error()
 	if strings.Contains(msg, "connection refused") || strings.Contains(msg, "no such host") ||
 		strings.Contains(msg, "dial tcp") {
-		return "não foi possível conectar ao Jira — verifique o host e sua conexão"
+		return "couldn't connect to Jira — check the host and your connection"
 	}
 	return msg
 }

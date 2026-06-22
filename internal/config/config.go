@@ -64,6 +64,16 @@ type Jira struct {
 	Assignee string   `yaml:"assignee"`
 	JQL      string   `yaml:"jql"`
 	Fields   Fields   `yaml:"fields"`
+	OnLaunch OnLaunch `yaml:"on_launch"`
+}
+
+// OnLaunch controls best-effort write-backs to Jira when an issue is launched.
+// Posting to a shared board is an outward-facing action, so it stays opt-in
+// (disabled by default).
+type OnLaunch struct {
+	// Comment posts a short "started via SprintMate" note on the issue so the
+	// team can see work has begun.
+	Comment bool `yaml:"comment"`
 }
 
 // Fields lets the user override auto-discovered custom field IDs.

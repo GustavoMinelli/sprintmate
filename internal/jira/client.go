@@ -328,6 +328,34 @@ func (c *Client) ListSprints(ctx context.Context, boardID int, state string) ([]
 	return sprints, nil
 }
 
+// AddComment posts a plain-text comment to an issue. The Jira Cloud v3 API
+// requires the body in Atlassian Document Format, so the text is wrapped in a
+// minimal ADF document.
+func (c *Client) AddComment(ctx context.Context, key, text string) error {
+	body := map[string]any{"body": textToADF(text)}
+	path := "/rest/api/3/issue/" + url.PathEscape(key) + "/comment"
+	return c.do(ctx, http.MethodPost, path, nil, body, nil)
+}
+
+// textToADF builds a minimal ADF document from plain text: each non-empty line
+// becomes its own paragraph.
+func textToADF(text string) map[string]any {
+	var paras []map[string]any
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line == "" {
+			continue
+		}
+		paras = append(paras, map[string]any{
+			"type":    "paragraph",
+			"content": []map[string]any{{"type": "text", "text": line}},
+		})
+	}
+	if len(paras) == 0 {
+		paras = []map[string]any{{"type": "paragraph"}}
+	}
+	return map[string]any{"type": "doc", "version": 1, "content": paras}
+}
+
 // isLoopbackHost reports whether an http:// URL points at the local machine,
 // where cleartext is acceptable (local dev / tests).
 func isLoopbackHost(raw string) bool {

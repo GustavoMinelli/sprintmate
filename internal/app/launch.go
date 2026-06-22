@@ -39,10 +39,10 @@ type Plan struct {
 func BuildPlan(cfg *config.Config, issue jira.Issue, agentName string) (Plan, error) {
 	dir, ok := cfg.WorkdirPath()
 	if !ok {
-		return Plan{}, fmt.Errorf("nenhuma pasta de trabalho configurada (defina em configurações)")
+		return Plan{}, fmt.Errorf("no working directory configured (set it in settings)")
 	}
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		return Plan{}, fmt.Errorf("a pasta de trabalho %q não existe", dir)
+		return Plan{}, fmt.Errorf("the working directory %q does not exist", dir)
 	}
 	branch := git.BranchName(cfg.Git.BranchPattern, issue.Key, issue.Title)
 	return Plan{Issue: issue, AgentName: agentName, Dir: dir, Branch: branch, Strategy: cfg.Launch.Strategy}, nil
@@ -74,11 +74,17 @@ func PrepareAndLaunch(ctx context.Context, cfg *config.Config, plan Plan) error 
 		branchForAgent = plan.Branch
 	}
 
-	// Best-effort: refresh the genuinely most-recent comments for the context.
+	// Best-effort Jira interactions; failures here never block the launch.
 	if cfg.Jira.Host != "" && plan.Issue.Key != "" {
 		client := jira.New(cfg.Jira.Host, cfg.Jira.Email, cfg.Jira.Token)
+		// Refresh the genuinely most-recent comments for the context (do this
+		// before posting our own note so it isn't fed back into the context).
 		if cs, err := client.RecentComments(prepCtx, plan.Issue.Key, 5); err == nil && len(cs) > 0 {
 			plan.Issue.Comments = cs
+		}
+		// Optionally post a launch note so the team can see work has started.
+		if cfg.Jira.OnLaunch.Comment {
+			_ = client.AddComment(prepCtx, plan.Issue.Key, launchComment(plan.AgentName, branchForAgent))
 		}
 	}
 
@@ -101,4 +107,13 @@ func PrepareAndLaunch(ctx context.Context, cfg *config.Config, plan Plan) error 
 		strategy = cfg.Launch.Strategy
 	}
 	return terminal.Launch(spec, strategy)
+}
+
+// launchComment is the note posted to the issue when jira.on_launch.comment is
+// enabled, so teammates can see the work has started.
+func launchComment(agent, branch string) string {
+	if branch != "" {
+		return fmt.Sprintf("Started via SprintMate with the %s agent on branch `%s`.", agent, branch)
+	}
+	return fmt.Sprintf("Started via SprintMate with the %s agent.", agent)
 }

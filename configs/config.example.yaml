@@ -6,8 +6,8 @@
 #   Windows: %AppData%\sprintmate\config.yaml
 
 jira:
-  host: https://empresa.atlassian.net
-  email: voce@empresa.com
+  host: https://company.atlassian.net
+  email: you@company.com
   token: xxxxx                 # or set the SPRINTMATE_JIRA_TOKEN env var
 
   # --- configurable issue source (board / columns / sprint) ---
@@ -23,6 +23,10 @@ jira:
   fields: {}
   #  sprint: customfield_10020
   #  story_points: customfield_10016
+
+  # --- write-back to Jira on launch (opt-in; off by default) ---
+  on_launch:
+    comment: false             # post a "started via SprintMate" note on the issue
 
 agent:
   default: claude
@@ -42,7 +46,7 @@ launch:
 
 git:
   create_branch: true
-  branch_pattern: "{key}-{slug}"   # e.g. demo-123-corrigir-login-social
+  branch_pattern: "{key}-{slug}"   # e.g. demo-123-fix-social-login
 
 keys:                          # configurable keybindings
   up: ["up", "k"]
@@ -55,5 +59,5 @@ keys:                          # configurable keybindings
   settings: ["s"]
   quit: ["q", "ctrl+c"]
 
-# pasta de trabalho: onde os agentes são abertos (toda demanda roda aqui)
-workdir: ~/Documents/projetos
+# working directory: where the agents are opened (every issue runs here)
+workdir: ~/Documents/projects

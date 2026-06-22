@@ -3,6 +3,7 @@ package jira
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -156,6 +157,32 @@ func TestClientHTMLResponse(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "invalid character") {
 		t.Errorf("error should not surface the raw JSON-decode failure, got %q", err)
+	}
+}
+
+func TestAddComment(t *testing.T) {
+	var gotMethod, gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod, gotPath = r.Method, r.URL.Path
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":"1"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "e", "t")
+	if err := c.AddComment(context.Background(), "DEMO-1", "Started via SprintMate"); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/rest/api/3/issue/DEMO-1/comment" {
+		t.Errorf("path = %q", gotPath)
+	}
+	if !strings.Contains(gotBody, `"type":"doc"`) || !strings.Contains(gotBody, "Started via SprintMate") {
+		t.Errorf("body should be an ADF doc containing the text, got: %s", gotBody)
 	}
 }
 

@@ -148,11 +148,11 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 			return d, nil
 		}
 		d.notice = ""
-		where := "em nova janela"
+		where := "in a new window"
 		if msg.strategy == terminal.Tmux {
-			where = "em nova janela do tmux"
+			where = "in a new tmux window"
 		}
-		d.status = fmt.Sprintf("✓ %s lançado %s — escolha outra demanda ou q para sair", msg.key, where)
+		d.status = fmt.Sprintf("✓ %s launched %s — pick another issue or q to quit", msg.key, where)
 		return d, nil
 
 	case tea.KeyPressMsg:
@@ -187,7 +187,7 @@ func (d dashboard) Update(msg tea.Msg) (dashboard, tea.Cmd) {
 				// back to an in-place handoff that would corrupt the live TUI.
 				plan.Strategy = strategy
 				d.launching = true
-				d.status = fmt.Sprintf("Lançando %s com %s…", issue.Key, agent)
+				d.status = fmt.Sprintf("Launching %s with %s…", issue.Key, agent)
 				return d, d.launchCmd(plan, strategy)
 			}
 		case key.Matches(msg, d.keys.switchAgent):
@@ -233,10 +233,10 @@ func (d dashboard) View(mas mascot) string {
 	var body string
 	switch {
 	case d.loading:
-		body = dimStyle.Render("  Carregando issues do Jira...")
+		body = dimStyle.Render("  Loading issues from Jira...")
 	case d.err != "":
-		body = errStyle.Render("  Erro: "+d.err) + "\n\n" +
-			helpStyle.Render("  r: tentar de novo   ·   s: configurações   ·   q: sair")
+		body = errStyle.Render("  Error: "+d.err) + "\n\n" +
+			helpStyle.Render("  r: retry   ·   s: settings   ·   q: quit")
 	default:
 		body = d.list.View()
 	}
@@ -245,9 +245,11 @@ func (d dashboard) View(mas mascot) string {
 	if board == "" {
 		board = "-"
 	}
-	footer := footerStyle.Render(fmt.Sprintf("Board: %s    Sprint: %s    Agent: %s",
-		board, orDash(d.sprintLabel), d.currentAgent()))
-	help := helpStyle.Render("↑/↓ navegar · enter abrir · tab agente · / buscar · r atualizar · o navegador · s config · q sair")
+	sep := "    "
+	footer := footerLabelStyle.Render("Board: ") + footerValueStyle.Render(board) +
+		sep + footerLabelStyle.Render("Sprint: ") + footerValueStyle.Render(orDash(d.sprintLabel)) +
+		sep + footerLabelStyle.Render("Agent: ") + footerValueStyle.Render(d.currentAgent())
+	help := helpStyle.Render("↑/↓ navigate · enter open · tab agent · / search · r refresh · o browser · s settings · q quit")
 	if d.status != "" {
 		help = okStyle.Render(d.status) + "\n" + help
 	}
@@ -255,7 +257,7 @@ func (d dashboard) View(mas mascot) string {
 		help = errStyle.Render("⚠ "+d.notice) + "\n" + help
 	}
 	if d.latest != "" {
-		notice := updateStyle.Render(fmt.Sprintf("↑ %s disponível — brew upgrade sprintmate", d.latest))
+		notice := updateStyle.Render(fmt.Sprintf("↑ %s available — brew upgrade sprintmate", d.latest))
 		help = notice + "\n" + help
 	}
 
@@ -325,7 +327,7 @@ func (d dashboard) loadIssues() tea.Cmd {
 func openURLCmd(url string) tea.Cmd {
 	return func() tea.Msg {
 		if err := terminal.OpenURL(url); err != nil {
-			return errMsg{err: fmt.Errorf("não foi possível abrir o navegador: %w", err)}
+			return errMsg{err: fmt.Errorf("couldn't open the browser: %w", err)}
 		}
 		return nil
 	}

@@ -101,8 +101,8 @@ func glitch(block string, frame int) string {
 // a key press (no auto-dismiss).
 func splashView(mc mascot, width, height int) string {
 	skull := glitch(strings.Join(glitchSkull, "\n"), mc.frame)
-	tag := glitchStyle.Render("‹ ACESSO LIBERADO ›")
-	hint := splashHintStyle.Render("// pressione qualquer tecla")
+	tag := glitchStyle.Render("‹ ACCESS GRANTED ›")
+	hint := splashHintStyle.Render("// press any key")
 
 	// Narrow terminals: skull + tag only, no 57-col wordmark.
 	if width > 0 && width < 64 {

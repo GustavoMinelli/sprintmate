@@ -105,7 +105,7 @@ func TestFilledViewFitsTerminal(t *testing.T) {
 	if width := lipgloss.Width(out); width > 100 {
 		t.Errorf("rendered width %d exceeds terminal 100", width)
 	}
-	if !strings.Contains(out, "Buscar pasta") {
+	if !strings.Contains(out, "Find folder") {
 		t.Error("filled workdir view should include the search panel")
 	}
 }
@@ -150,7 +150,7 @@ func TestRenderDirCompletion(t *testing.T) {
 		t.Errorf("completion missing the subdir:\n%s", out)
 	}
 	// A leaf that matches nothing reports it instead of listing files.
-	if !strings.Contains(renderDirCompletion(dir+"/zzz", 40, 10), "nenhuma pasta") {
+	if !strings.Contains(renderDirCompletion(dir+"/zzz", 40, 10), "no folder") {
 		t.Error("non-matching leaf should report no matches")
 	}
 	// empty input lists HOME, not the (project) working dir

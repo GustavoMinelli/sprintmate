@@ -94,7 +94,7 @@ func renderNode(b *strings.Builder, n *adfNode, listPrefix string) {
 			b.WriteString(u)
 		}
 	case "mediaSingle", "mediaGroup", "media":
-		b.WriteString("[mídia]")
+		b.WriteString("[media]")
 		renderNodes(b, n.Content, listPrefix)
 	default:
 		// Unknown node: recurse for any text content so nothing is silently lost.

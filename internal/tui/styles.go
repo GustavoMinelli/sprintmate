@@ -39,9 +39,14 @@ var (
 			Background(colorPrimary).
 			Padding(0, 1)
 
-	labelStyle  = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
-	footerStyle = lipgloss.NewStyle().Foreground(colorMuted)
-	helpStyle   = lipgloss.NewStyle().Foreground(colorMuted)
+	labelStyle = lipgloss.NewStyle().Foreground(colorAccent).Bold(true)
+
+	// Footer status bar: quieter labels, bright values so the live state
+	// (board / sprint / agent) reads at a glance instead of sinking into gray.
+	footerLabelStyle = lipgloss.NewStyle().Foreground(colorAccent)
+	footerValueStyle = lipgloss.NewStyle().Foreground(colorPrimary).Bold(true)
+
+	helpStyle = lipgloss.NewStyle().Foreground(colorAccent)
 	errStyle    = lipgloss.NewStyle().Foreground(colorErr).Bold(true)
 	okStyle     = lipgloss.NewStyle().Foreground(colorOK)
 	updateStyle = lipgloss.NewStyle().Foreground(colorOK).Bold(true)

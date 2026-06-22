@@ -237,6 +237,43 @@ func TestWizardFinishSavesConfig(t *testing.T) {
 	}
 }
 
+func TestWizardCommentStepOptIn(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+
+	w := newWizard(config.Default(), false)
+	if w.commentCur != 0 {
+		t.Fatalf("comment should default to No (private), got %d", w.commentCur)
+	}
+
+	// Sprint → Enter advances into the new comment step.
+	w.step = stepSprint
+	w, _ = w.Update(keyPress("enter"))
+	if w.step != stepComment {
+		t.Fatalf("sprint enter should advance to stepComment, got %d", w.step)
+	}
+
+	// Choose "Yes", then continue to the agent step.
+	w, _ = w.Update(keyPress("down"))
+	if w.commentCur != 1 {
+		t.Fatalf("down should select Yes, got %d", w.commentCur)
+	}
+	w, _ = w.Update(keyPress("enter"))
+	if w.step != stepAgent {
+		t.Fatalf("comment enter should advance to stepAgent, got %d", w.step)
+	}
+
+	// finish() must persist the opt-in.
+	w.inputs[0].SetValue("https://empresa.atlassian.net")
+	w.inputs[1].SetValue("voce@empresa.com")
+	w.inputs[2].SetValue("tok")
+	w.workdir.SetValue(t.TempDir())
+	_, cmd := w.finish()
+	if !cmd().(wizardDoneMsg).cfg.Jira.OnLaunch.Comment {
+		t.Error("finish should persist the comment opt-in")
+	}
+}
+
 func TestRootScreenSwitching(t *testing.T) {
 	m := newModel(validCfg(), false, "dev")
 	if m.screen != screenDashboard {

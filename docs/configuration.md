@@ -22,6 +22,7 @@ field is hand-editable. Missing optional fields fall back to defaults.
 | `assignee` | string   | `currentUser` \| `<accountId>` \| `all`. |
 | `jql`      | string   | Full JQL override. When set, `board`/`columns`/`sprint` are ignored and the query runs against `/rest/api/3/search/jql`. |
 | `fields`   | map      | Optional custom-field overrides; auto-discovered when omitted. |
+| `on_launch.comment` | bool | Post a short "started via SprintMate" comment on the issue when you launch it. Off by default — writing to a shared board is opt-in. |
 
 ### Custom fields
 
@@ -34,6 +35,24 @@ jira:
     sprint: customfield_10020
     story_points: customfield_10016
 ```
+
+### Write-back on launch
+
+By default SprintMate only reads from Jira. The setup wizard asks whether to
+post a short "started via SprintMate" note on an issue when you launch it (so the
+team can see work has begun) and **defaults to off for privacy** — nothing is
+written to Jira unless you opt in. You can also set it by hand:
+
+```yaml
+jira:
+  on_launch:
+    comment: true
+```
+
+The comment is best-effort: if it fails (permissions, network) the launch still
+proceeds. The generated `.issue-context.md` also fences the issue description and
+comments as **untrusted input**, so the agent treats that external text as data
+rather than instructions (a guard against prompt injection through tickets).
 
 ## `agent` and `agents`
 

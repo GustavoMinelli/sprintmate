@@ -145,24 +145,24 @@ func (m mascot) eyeColor(mood mascotMood) color.Color {
 
 var mascotSay = map[mascotMood][]string{
 	moodIdle: {
-		"bora pra sprint!",
-		"qual issue a gente ataca?",
-		"tô de prontidão",
-		"partiu trampar",
+		"let's sprint!",
+		"which issue first?",
+		"on standby",
+		"let's get to work",
 	},
 	moodWorking: {
-		"buscando no Jira...",
-		"caçando issues...",
-		"já tô indo...",
+		"searching Jira...",
+		"hunting issues...",
+		"on my way...",
 	},
 	moodError: {
-		"opa, deu ruim",
-		"algo travou aqui",
-		"bora tentar de novo?",
+		"oops, that broke",
+		"something jammed here",
+		"shall we try again?",
 	},
 	moodHappy: {
-		"mandando ver!",
-		"bora!",
+		"crushing it!",
+		"let's go!",
 	},
 }
 
